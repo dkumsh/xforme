@@ -36,6 +36,9 @@ fn build_template(path: &std::path::Path) {
     ws.cell_mut("A3").set_value("footer");
     ws.cell_mut("C3").set_formula("SUM(C$2:C2)");
 
+    // A custom row height on the header row, to check it's carried to output.
+    ws.row_dimension_mut(1).set_height(33.0);
+
     umya_spreadsheet::writer::xlsx::write(&book, path).unwrap();
 }
 
@@ -75,6 +78,9 @@ fn renders_template_to_report() {
 
     // Header placeholder filled.
     assert_eq!(ws.value("B1"), "My Report");
+
+    // The custom header-row height was carried over.
+    assert_eq!(ws.row_dimension(1).map(|r| r.height()), Some(33.0));
 
     // Detail band: rows 2,3,4 carry qty 2,3,4 with row-shifted formulas.
     assert_eq!(ws.value("B2"), "2");

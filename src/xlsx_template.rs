@@ -189,6 +189,8 @@ struct TplRow {
     cells: Vec<TplCell>,
     /// Horizontal merges on this row, as `(start_col, end_col)`.
     merges: Vec<(u32, u32)>,
+    /// Explicit row height, if the designer set one (copied to the output row).
+    height: Option<f64>,
 }
 
 /// The owned, workbook-independent template model.
@@ -301,6 +303,7 @@ fn extract_template(book: &Workbook, sheet_name: &str) -> Result<TplModel> {
             label,
             cells,
             merges: merges_by_row.remove(&r).unwrap_or_default(),
+            height: ws.row_dimension(r).map(|rd| rd.height()),
         });
     }
 
@@ -421,6 +424,12 @@ fn write_output(book: &mut Workbook, title: &str, model: &TplModel, plan: &Plan)
     ws.column_dimension_by_number_mut(TAG_COL).set_hidden(true);
 
     for emit in &plan.emits {
+        // Carry over an explicit row height the designer set on the template row.
+        if let Some(h) = emit.tpl.height
+            && h > 0.0
+        {
+            ws.row_dimension_mut(emit.out_row).set_height(h);
+        }
         let delta = emit.out_row as i64 - emit.tpl.row as i64;
         let schema = model.schemas.get(&emit.tpl.label);
         for tcell in &emit.tpl.cells {
