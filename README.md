@@ -9,11 +9,12 @@ xforme is the Rust migration of [*templateIt*](https://templateit.sourceforge.ne
 [Sales Receipt](https://templateit.sourceforge.net/SalesReceipt.html) example.
 
 The idea: **design the document once as an ordinary Excel workbook**, then stream
-a data file (tab-delimited, JSON, or YAML) through it. The engine copies the template sheet into a
-new tab, fills the parameters, replicates the repeating rows, and removes the
-template tab — preserving every style, number format, merge and formula. The
-original templateIt used Apache POI for this; xforme uses
-[`umya-spreadsheet`](https://crates.io/crates/umya-spreadsheet).
+a data file (tab-delimited, JSON, or YAML) through it. The engine **edits the
+template sheet in place** — filling parameters, growing the repeating rows, and
+renaming the sheet — so it preserves *everything* in the workbook: styles, number
+formats, merges, formulas, **conditional formatting, images, charts, data
+validations, print setup**. The original templateIt used Apache POI for this;
+xforme uses [`umya-spreadsheet`](https://crates.io/crates/umya-spreadsheet).
 
 `.xlsx` is the product. **PDF, when you need it, is just a downstream conversion**
 of the produced spreadsheet (Excel "Save as PDF", or a headless LibreOffice — the
@@ -56,9 +57,10 @@ template.xlsx ──────────────────────
 ```
 
 * **`data`** — parses the tab-delimited stream format (`#sheet` … records … `##end`).
-* **`xlsx_template`** — reads the designer's `.xlsx`, fills a new tab from the
-  data, and removes the template tab; preserves styles, number formats, merges
-  and native formulas (via `umya-spreadsheet`).
+* **`xlsx_template`** — edits the designer's `.xlsx` sheet in place: resizes the
+  detail band (row insert/remove, which grows spanning ranges), fills params,
+  and renames the sheet; preserves styles, number formats, merges, formulas,
+  conditional formatting, images, charts (via `umya-spreadsheet`).
 * **`demo_template`** — builds the bundled sample Sales Receipt template.
 
 ## Run it

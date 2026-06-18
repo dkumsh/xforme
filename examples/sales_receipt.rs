@@ -17,7 +17,7 @@ use xforme::{data, xlsx_template};
 static TEMPLATE: &[u8] = include_bytes!("../templates/sales_receipt_template.xlsx");
 
 /// The data stream, compiled in as well.
-const DATA: &str = include_str!("../data/sales_receipt.txt");
+const DATA: &str = include_str!("../data/sales_receipt.json");
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let out_path = std::env::args()
@@ -25,7 +25,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|| "target/sales_receipt.xlsx".to_string());
 
     // Parse the embedded data and render it through the embedded template.
-    let sheets = data::parse(DATA)?;
+    let sheets = data::parse_json(DATA)?;
     let sheet = sheets.first().ok_or("embedded data contained no sheets")?;
 
     // `render_to_file` accepts the template as bytes (here) or a path.

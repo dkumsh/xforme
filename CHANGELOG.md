@@ -43,7 +43,17 @@ code-defined ("declarative") engine.
 - The `.xlsx` is generated entirely in memory (`umya-spreadsheet`); PDF is a
   downstream conversion of it (Excel-faithful, since LibreOffice recalculates
   the formulas). The CLI emits both by default; `--no-pdf` skips the PDF.
-- Designer-set **row heights** on template rows are carried over to the output.
+- **Render by editing the template sheet in place** instead of building a fresh
+  sheet. The engine resizes the detail band with row insert/remove (which grows
+  spanning ranges like a footer `SUM` or a conditional-format range), fills
+  params, and renames the sheet. This **preserves everything in the workbook** —
+  conditional formatting, images, charts, data validations, print setup, frozen
+  panes, column widths — not just cell values/styles. Cached formula results are
+  cleared so Excel/LibreOffice recompute on open. Designer-set row heights are
+  carried over.
+- The engine now reads `#name` parameter markers from **rich-text comments** too
+  (the form Excel/LibreOffice write when a template is edited and saved), so a
+  re-saved template keeps binding its parameters.
 
 ## [0.1.1] - 2026-06-18
 

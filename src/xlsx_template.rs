@@ -38,8 +38,15 @@
 //!   put. (This mirrors the original templateIt, which offset only the relative
 //!   parts of references when replicating cells.)
 //!
-//! The output workbook gets a new sheet (named after the data stream's sheet
-//! title) holding the rendered result, and the template sheet is removed.
+//! The engine **edits the template sheet in place** (rather than building a new
+//! one): it resizes the detail band with row inserts/removes, fills parameters,
+//! hides the control column, strips the directive comments, and renames the
+//! sheet to the output title. Keeping the sheet means everything the designer
+//! put in the workbook that we don't touch — conditional formatting, images,
+//! charts, data validations, print setup, frozen panes — is preserved, and
+//! `umya`'s insert/remove adjusts the spanning ranges (a footer `SUM`, a
+//! conditional-format range) along with the band. Cached formula results are
+//! cleared so Excel/LibreOffice recompute on open.
 
 use crate::data::Sheet;
 use std::io::Cursor;
@@ -81,8 +88,8 @@ impl<'a> From<&'a Vec<u8>> for TemplateSource<'a> {
     }
 }
 
-/// Render a data sheet against a template, returning the populated workbook with
-/// the template sheet removed.
+/// Render a data sheet against a template, returning the populated workbook
+/// (the template sheet edited in place and renamed to the output title).
 ///
 /// `source` accepts anything convertible into a [`TemplateSource`], so both a
 /// file path and a byte slice work:
@@ -109,21 +116,13 @@ pub fn render_with_warnings<'a>(
 ) -> Result<(Workbook, Vec<String>)> {
     let mut book = read_template(source.into())?;
 
+    // Snapshot the template structure, then *edit the template sheet in place*.
+    // Keeping the sheet (rather than building a new one) preserves everything
+    // umya models that we don't touch — conditional formatting, images, charts,
+    // data validations, print setup, frozen panes, column widths, styles.
     let model = extract_template(&book, &sheet.template)?;
     let warnings = collect_warnings(&model, sheet);
-    let plan = plan_rows(&model, sheet);
-
-    // The model is fully owned now, so we can mutate the workbook freely.
-    book.remove_sheet_by_name(&sheet.template)
-        .map_err(|e| format!("removing template sheet `{}`: {e:?}", sheet.template))?;
-
-    // The template sheet is gone, so its title (or the data title) is free.
-    let title = if sheet.title.trim().is_empty() {
-        "Report"
-    } else {
-        sheet.title.trim()
-    };
-    write_output(&mut book, title, &model, &plan)?;
+    fill_in_place(&mut book, sheet, &model)?;
     Ok((book, warnings))
 }
 
@@ -208,8 +207,6 @@ struct TplRow {
 /// The owned, workbook-independent template model.
 struct TplModel {
     rows: Vec<TplRow>,
-    /// `(column_number, width)` for every column that declares a width.
-    col_widths: Vec<(u32, f64)>,
     /// Ordered field names declared per label, e.g.
     /// `header → [date, receipt, customer, address]`. Used to resolve `#name`
     /// parameters to positional data fields.
@@ -331,36 +328,12 @@ fn extract_template(book: &Workbook, sheet_name: &str) -> Result<TplModel> {
         });
     }
 
-    let mut col_widths = Vec::new();
-    for c in 1..=max_col {
-        if let Some(col) = ws.column_dimension_by_number(c) {
-            col_widths.push((c, col.width()));
-        }
-    }
-
-    Ok(TplModel {
-        rows,
-        col_widths,
-        schemas,
-    })
+    Ok(TplModel { rows, schemas })
 }
 
 // ---------------------------------------------------------------------------
-// Planning: map template rows + data records onto output rows
+// Filling: edit the (kept) template sheet in place
 // ---------------------------------------------------------------------------
-
-/// One planned output row: which template row produces it and which data fields
-/// feed its placeholders.
-struct Emit<'a> {
-    tpl: &'a TplRow,
-    fields: Vec<String>,
-    named: std::collections::BTreeMap<String, String>,
-    out_row: u32,
-}
-
-struct Plan<'a> {
-    emits: Vec<Emit<'a>>,
-}
 
 /// Labels that denote a once-only band rather than a repeating detail row.
 fn is_singleton_label(label: &str) -> bool {
@@ -394,113 +367,152 @@ fn collect_warnings(model: &TplModel, sheet: &Sheet) -> Vec<String> {
     warnings
 }
 
-fn plan_rows<'a>(model: &'a TplModel, sheet: &Sheet) -> Plan<'a> {
-    let record_data = |label: &str| -> (Vec<String>, std::collections::BTreeMap<String, String>) {
-        sheet
-            .records
-            .iter()
-            .find(|rec| rec.label == label)
-            .map(|rec| (rec.fields.clone(), rec.named.clone()))
-            .unwrap_or_default()
-    };
+/// The data fields (positional + named) of the record with `label`, if any.
+fn record_data(
+    sheet: &Sheet,
+    label: &str,
+) -> (Vec<String>, std::collections::BTreeMap<String, String>) {
+    sheet
+        .records
+        .iter()
+        .find(|rec| rec.label == label)
+        .map(|rec| (rec.fields.clone(), rec.named.clone()))
+        .unwrap_or_default()
+}
+
+/// The contiguous run of detail template rows as inclusive sheet rows
+/// `(start, end, height)`, or `None` if the template has no detail rows.
+fn detail_band(model: &TplModel) -> Option<(u32, u32, usize)> {
+    let rows: Vec<&TplRow> = model
+        .rows
+        .iter()
+        .filter(|r| is_detail_label(&r.label))
+        .collect();
+    rows.first()
+        .map(|f| (f.row, rows[rows.len() - 1].row, rows.len()))
+}
+
+/// Render by editing the kept template sheet in place: resize the detail band to
+/// the data, fill parameters, drop the control column and directive comments,
+/// and rename the sheet to the output title. Everything else the designer put in
+/// the workbook (conditional formatting, images, charts, print setup, …) is left
+/// untouched, and `umya`'s row insert/remove adjusts the spanning ranges.
+fn fill_in_place(book: &mut Workbook, sheet: &Sheet, model: &TplModel) -> Result<()> {
+    let band = detail_band(model);
     let detail_records: Vec<&crate::data::Record> = sheet
         .records
         .iter()
-        .filter(|rec| is_detail_label(&rec.label))
+        .filter(|r| is_detail_label(&r.label))
+        .collect();
+    let m = detail_records.len();
+    // How far rows below the band move after the resize.
+    let shift = band.map_or(0, |(_, _, h)| m as i64 - h as i64);
+    let band_end = band.map(|(_, e, _)| e);
+    let detail_rows: Vec<&TplRow> = model
+        .rows
+        .iter()
+        .filter(|r| is_detail_label(&r.label))
         .collect();
 
-    let mut emits = Vec::new();
-    let mut out_row: u32 = 1;
-
-    let mut i = 0;
-    while i < model.rows.len() {
-        let row = &model.rows[i];
-        if is_detail_label(&row.label) {
-            // Gather the contiguous detail band.
-            let band_start = i;
-            while i < model.rows.len() && is_detail_label(&model.rows[i].label) {
-                i += 1;
-            }
-            let band = &model.rows[band_start..i];
-            for rec in &detail_records {
-                let tpl = band
-                    .iter()
-                    .find(|tr| tr.label == rec.label)
-                    .unwrap_or(&band[0]);
-                emits.push(Emit {
-                    tpl,
-                    fields: rec.fields.clone(),
-                    named: rec.named.clone(),
-                    out_row,
-                });
-                out_row += 1;
-            }
-        } else {
-            let (fields, named) = if is_singleton_label(&row.label) {
-                record_data(&row.label)
-            } else {
-                Default::default()
-            };
-            emits.push(Emit {
-                tpl: row,
-                fields,
-                named,
-                out_row,
-            });
-            out_row += 1;
-            i += 1;
-        }
-    }
-
-    Plan { emits }
-}
-
-// ---------------------------------------------------------------------------
-// Output writing
-// ---------------------------------------------------------------------------
-
-fn write_output(book: &mut Workbook, title: &str, model: &TplModel, plan: &Plan) -> Result<()> {
     let ws = book
-        .new_sheet(title)
-        .map_err(|e| format!("creating output sheet `{title}`: {e:?}"))?;
+        .sheet_by_name_mut(&sheet.template)
+        .map_err(|e| format!("template sheet `{}` not found: {e:?}", sheet.template))?;
 
-    for &(c, w) in &model.col_widths {
-        ws.column_dimension_by_number_mut(c).set_width(w);
-    }
-    // Hide the control-tag column in the rendered report.
-    ws.column_dimension_by_number_mut(TAG_COL).set_hidden(true);
-
-    for emit in &plan.emits {
-        // Carry over an explicit row height the designer set on the template row.
-        if let Some(h) = emit.tpl.height
-            && h > 0.0
-        {
-            ws.row_dimension_mut(emit.out_row).set_height(h);
+    // 1. Resize the detail band to the record count. Insert *inside* the band so
+    //    spanning ranges (a footer SUM, conditional formatting) grow with it.
+    if let Some((start, end, h)) = band {
+        let k = m as i64 - h as i64;
+        if k > 0 {
+            ws.insert_new_row(end, k as u32);
+        } else if k < 0 {
+            ws.remove_row(start, (-k) as u32);
         }
-        let delta = emit.out_row as i64 - emit.tpl.row as i64;
-        let schema = model.schemas.get(&emit.tpl.label);
-        for tcell in &emit.tpl.cells {
-            let at = coord(tcell.col, emit.out_row);
-            let cell = ws.cell_mut(at.as_str());
-            cell.set_style(tcell.style.clone());
+    }
 
-            if tcell.is_formula {
-                // Formulas are valid Excel; just shift relative references.
-                cell.set_formula(formula::shift_rows(&tcell.content, delta));
-            } else if let Some(param) = &tcell.param {
-                // Replace the sample value with the resolved data field.
-                cell.set_value(resolve_param(param, schema, &emit.fields, &emit.named));
-            } else {
-                // Static cell — keep the designer's literal value.
-                cell.set_value(tcell.content.clone());
+    // 2. The control column and the parameter comments don't belong in output.
+    ws.column_dimension_by_number_mut(TAG_COL).set_hidden(true);
+    ws.comments_mut().clear();
+
+    // 3. Fill parameters on the once-only header/footer rows, at their post-resize
+    //    positions (rows below the band moved by `shift`).
+    for trow in &model.rows {
+        if !is_singleton_label(&trow.label) {
+            continue;
+        }
+        let cur = match band_end {
+            Some(end) if trow.row > end => (trow.row as i64 + shift) as u32,
+            _ => trow.row,
+        };
+        let (fields, named) = record_data(sheet, &trow.label);
+        let schema = model.schemas.get(&trow.label);
+        for cell in &trow.cells {
+            if let Some(param) = &cell.param {
+                ws.cell_mut(coord(cell.col, cur).as_str())
+                    .set_value(resolve_param(param, schema, &fields, &named));
             }
         }
-        for &(c1, c2) in &emit.tpl.merges {
-            let range = format!("{}:{}", coord(c1, emit.out_row), coord(c2, emit.out_row));
-            ws.add_merge_cells(range);
+    }
+
+    // 4. Rewrite the detail band: one row per record, banding by label, formulas
+    //    row-shifted, params resolved, merges and heights re-applied.
+    if let Some((start, _, h)) = band
+        && m > 0
+    {
+        // Drop any merges inside the resized band; we re-add them per row.
+        let (lo, hi) = (start, start + m as u32 - 1);
+        ws.merge_cells_mut().retain(|rng| {
+            let (_, r1, _, r2) = parse_range(&rng.range());
+            !(r1 >= lo && r2 <= hi)
+        });
+        for (i, rec) in detail_records.iter().enumerate() {
+            let target = start + i as u32;
+            let src = detail_rows
+                .iter()
+                .find(|r| r.label == rec.label)
+                .copied()
+                .unwrap_or(detail_rows[i % h]);
+            let delta = target as i64 - src.row as i64;
+            let schema = model.schemas.get(&src.label);
+            if let Some(height) = src.height
+                && height > 0.0
+            {
+                ws.row_dimension_mut(target).set_height(height);
+            }
+            for cell in &src.cells {
+                let c = ws.cell_mut(coord(cell.col, target).as_str());
+                c.set_style(cell.style.clone());
+                if cell.is_formula {
+                    c.set_formula(formula::shift_rows(&cell.content, delta));
+                } else if let Some(param) = &cell.param {
+                    c.set_value(resolve_param(param, schema, &rec.fields, &rec.named));
+                } else {
+                    c.set_value(cell.content.clone());
+                }
+            }
+            for &(c1, c2) in &src.merges {
+                ws.add_merge_cells(format!("{}:{}", coord(c1, target), coord(c2, target)));
+            }
         }
     }
 
+    // 5. Drop cached formula results. The cloned template may carry stale cached
+    //    values (e.g. computed from the sample data, or by a prior Excel/
+    //    LibreOffice save); clearing them forces a recompute on open.
+    for cell in ws.cells_mut() {
+        if cell.is_formula() {
+            cell.set_formula_result_default("");
+        }
+    }
+
+    // 6. Rename the edited template sheet to the output title.
+    let title = if sheet.title.trim().is_empty() {
+        sheet.template.as_str()
+    } else {
+        sheet.title.trim()
+    };
+    if title != sheet.template {
+        ws.set_name(title);
+    }
     Ok(())
 }
 

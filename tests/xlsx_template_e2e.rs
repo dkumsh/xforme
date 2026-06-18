@@ -27,10 +27,12 @@ fn build_template(path: &std::path::Path) {
     ws.cell_mut("A1").set_value("header(title)");
     param(ws, "B1", "Sample Title", "title");
 
-    // detail band: schema `qty`; amount = qty * 10 via a real formula.
+    // detail band: schema `qty`; amount = qty * 10 via a real formula. Seed a
+    // *stale* cached result (as Excel/LibreOffice would) to check it's cleared.
     ws.cell_mut("A2").set_value("item(qty)");
     param(ws, "B2", "1", "qty");
     ws.cell_mut("C2").set_formula("B2*10");
+    ws.cell_mut("C2").set_formula_result_number(999.0);
 
     // footer: SUM over the detail band, mixed anchoring (start anchored).
     ws.cell_mut("A3").set_value("footer");
@@ -91,6 +93,9 @@ fn renders_template_to_report() {
     // Footer landed on row 5; its SUM expanded over the rendered detail band:
     // the anchored start stays `C$2`, the relative end grew from C2 to C4.
     assert_eq!(ws.cell("C5").unwrap().formula(), "SUM(C$2:C4)");
+
+    // The stale cached formula result was cleared (recomputes on open).
+    assert_ne!(ws.cell("C2").unwrap().value(), "999");
 
     let _ = std::fs::remove_file(&tpl);
     let _ = std::fs::remove_file(&out);
@@ -198,6 +203,70 @@ fn reads_rich_text_comment_markers() {
     let ws = book.sheet_by_name("Report").unwrap();
     // The rich-text `#title` was resolved to the data, not left as the sample.
     assert_eq!(ws.value("B1"), "Hello");
+
+    let _ = std::fs::remove_file(&tpl);
+}
+
+#[test]
+fn preserves_and_grows_conditional_formatting() {
+    // The whole point of clone-and-edit: features we don't touch (here a
+    // conditional-formatting rule) survive, and umya's row insert grows the
+    // rule's range with the expanding detail band.
+    use umya_spreadsheet::{
+        Comment, ConditionalFormatValues, ConditionalFormatting, ConditionalFormattingRule,
+        SequenceOfReferences, Style,
+    };
+
+    let dir = std::env::temp_dir();
+    let tpl = dir.join("xforme_cf_tmpl.xlsx");
+    {
+        let mut book = umya_spreadsheet::new_file();
+        book.set_sheet_name(0, "T").unwrap();
+        let ws = book.sheet_by_name_mut("T").unwrap();
+        // 2-row detail band (row1/row2) with an amount in column B.
+        for (cell, label) in [("A1", "row1(amount)"), ("A2", "row2(amount)")] {
+            ws.cell_mut(cell).set_value(label);
+        }
+        for cell in ["B1", "B2"] {
+            ws.cell_mut(cell).set_value("0");
+            let mut c = Comment::default();
+            c.new_comment(cell);
+            c.set_text_string("#amount");
+            ws.add_comments(c);
+        }
+        // A conditional-formatting rule over the band's amount column.
+        let mut seq = SequenceOfReferences::default();
+        seq.set_sqref("B1:B2");
+        let mut style = Style::default();
+        style.set_background_color("FFFFFF00");
+        let mut rule = ConditionalFormattingRule::default();
+        rule.set_type(ConditionalFormatValues::DuplicateValues);
+        rule.set_priority(1);
+        rule.set_style(style);
+        let mut cf = ConditionalFormatting::default();
+        cf.set_sequence_of_references(seq);
+        cf.add_conditional_collection(rule);
+        ws.add_conditional_formatting_collection(cf);
+
+        umya_spreadsheet::writer::xlsx::write(&book, &tpl).unwrap();
+    }
+
+    // Four records -> band expands to 4 rows; the CF range should grow to B1:B4.
+    let raw = "#sheet\tT\tOut\nrow1\t10\nrow2\t20\nrow1\t30\nrow2\t40\n##end\n";
+    let sheet = &data::parse(raw).unwrap()[0];
+    let bytes = std::fs::read(&tpl).unwrap();
+    let out = xforme::xlsx_template::render_to_bytes(bytes.as_slice(), sheet).unwrap();
+
+    let book =
+        umya_spreadsheet::reader::xlsx::read_reader(std::io::Cursor::new(out), true).unwrap();
+    let ws = book.sheet_by_name("Out").unwrap();
+    let cf = ws.conditional_formatting_collection();
+    assert_eq!(cf.len(), 1, "conditional formatting preserved");
+    let sqref = cf[0].get_sequence_of_references().get_sqref();
+    assert!(
+        sqref.contains("B4"),
+        "CF range grew with the band, got {sqref:?}"
+    );
 
     let _ = std::fs::remove_file(&tpl);
 }
