@@ -157,3 +157,47 @@ fn renders_template_from_bytes() {
 
     let _ = std::fs::remove_file(&tpl);
 }
+
+#[test]
+fn reads_rich_text_comment_markers() {
+    // Excel/LibreOffice rewrite cell comments as rich-text runs on save. The
+    // engine must still read the `#name` marker from that form (regression).
+    use umya_spreadsheet::{Comment, CommentText, RichText, TextElement};
+
+    let dir = std::env::temp_dir();
+    let tpl = dir.join("xforme_richcomment_tmpl.xlsx");
+    {
+        let mut book = umya_spreadsheet::new_file();
+        book.set_sheet_name(0, "Tmpl").unwrap();
+        let ws = book.sheet_by_name_mut("Tmpl").unwrap();
+        ws.cell_mut("A1").set_value("header(title)");
+        ws.cell_mut("B1").set_value("PLACEHOLDER");
+
+        // A comment whose text lives in rich-text runs (not a plain node).
+        let mut element = TextElement::default();
+        element.set_text("#title");
+        let mut rich = RichText::default();
+        rich.add_rich_text_elements(element);
+        let mut text = CommentText::default();
+        text.set_rich_text(rich);
+        let mut comment = Comment::default();
+        comment.new_comment("B1");
+        comment.set_text(text);
+        ws.add_comments(comment);
+
+        umya_spreadsheet::writer::xlsx::write(&book, &tpl).unwrap();
+    }
+
+    let raw = "#sheet\tTmpl\tReport\nheader\tHello\n##end\n";
+    let sheet = &data::parse(raw).unwrap()[0];
+    let bytes = std::fs::read(&tpl).unwrap();
+    let out = xforme::xlsx_template::render_to_bytes(bytes.as_slice(), sheet).unwrap();
+
+    let book =
+        umya_spreadsheet::reader::xlsx::read_reader(std::io::Cursor::new(out), true).unwrap();
+    let ws = book.sheet_by_name("Report").unwrap();
+    // The rich-text `#title` was resolved to the data, not left as the sample.
+    assert_eq!(ws.value("B1"), "Hello");
+
+    let _ = std::fs::remove_file(&tpl);
+}

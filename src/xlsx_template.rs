@@ -255,6 +255,23 @@ fn parse_param(comment: &str) -> Option<Param> {
     }
 }
 
+/// Read a comment's text, handling both **plain** comments (as xforme writes
+/// them) and **rich-text** comments (as Excel/LibreOffice rewrite them on save —
+/// the text then lives in formatted runs, not a plain node).
+fn comment_text(comment: &umya_spreadsheet::Comment) -> String {
+    let ct = comment.text();
+    if let Some(t) = ct.text() {
+        let s = t.value();
+        if !s.is_empty() {
+            return s.to_string();
+        }
+    }
+    if let Some(rt) = ct.rich_text() {
+        return rt.text().into_owned();
+    }
+    String::new()
+}
+
 fn extract_template(book: &Workbook, sheet_name: &str) -> Result<TplModel> {
     let ws = book
         .sheet_by_name(sheet_name)
@@ -273,12 +290,7 @@ fn extract_template(book: &Workbook, sheet_name: &str) -> Result<TplModel> {
     // Index parameter markers by their (col, row), read from cell comments.
     let mut params_by_cell: std::collections::HashMap<(u32, u32), Param> = Default::default();
     for comment in ws.comments() {
-        let text = comment
-            .text()
-            .text()
-            .map(|t| t.value().to_string())
-            .unwrap_or_default();
-        if let Some(param) = parse_param(&text) {
+        if let Some(param) = parse_param(&comment_text(comment)) {
             let co = comment.coordinate();
             params_by_cell.insert((co.col_num(), co.row_num()), param);
         }
