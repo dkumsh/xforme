@@ -1,19 +1,30 @@
 [package]
 name = "xforme"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
 default-run = "xforme"
 authors = ["Dmitriy Kumshayev <dq@mail.com>"]
-description = "Stream data through Excel templates to mass-produce spreadsheets and PDFs, formatting and formulas intact."
+description = "Stream data through Excel templates to mass-produce richly-formatted .xlsx spreadsheets, formatting and formulas intact."
 license = "MIT"
 readme = "README.md"
 repository = "https://github.com/dkumsh/xforme"
 homepage = "https://github.com/dkumsh/xforme"
 documentation = "https://docs.rs/xforme"
-keywords = ["excel", "xlsx", "template", "pdf", "report"]
+keywords = ["excel", "xlsx", "template", "report", "spreadsheet"]
 categories = ["template-engine", "command-line-utilities"]
 
+[features]
+default = ["pdf", "json", "yaml"]
+# Optional PDF output by converting the rendered .xlsx with a headless
+# LibreOffice. Pure-std (spawns a subprocess); disable for an xlsx-only crate
+# that can't execute subprocesses: `default-features = false`.
+pdf = []
+# JSON / YAML data inputs (in addition to the always-available tab-delimited
+# format). Each pulls a serde parser; disable to drop those dependencies.
+json = ["dep:serde_json"]
+yaml = ["dep:serde_json", "dep:serde_norway"]
+
 [dependencies]
-printpdf = "0.9.1"
-rust_xlsxwriter = "0.95.0"
 umya-spreadsheet = "3.0.0"
+serde_json = { version = "1", optional = true }
+serde_norway = { version = "0.9", optional = true }

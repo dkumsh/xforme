@@ -28,8 +28,9 @@ pub fn sample_sales_receipt_template_bytes() -> Vec<u8> {
         .expect("rename sheet");
     let ws = book.sheet_by_name_mut("SalesReceipt").expect("sheet");
 
-    // Column widths: A is the (hidden-on-output) control-label column.
-    ws.column_dimension_mut("A").set_width(4.0);
+    // Column widths: A is the control-label column. It's hidden in the output,
+    // so it's made wide enough here to read the labels/schemas while designing.
+    ws.column_dimension_mut("A").set_width(16.0);
     ws.column_dimension_mut("B").set_width(8.0);
     ws.column_dimension_mut("C").set_width(40.0);
     ws.column_dimension_mut("D").set_width(13.0);
@@ -44,26 +45,21 @@ pub fn sample_sales_receipt_template_bytes() -> Vec<u8> {
     );
     ws.add_merge_cells("B1:E1");
 
-    // Rows 2-4 — header band. Column A declares the field schema once.
+    // Rows 2-4 — header band. Column A declares the field schema once. The cells
+    // hold obvious *placeholder* samples so it's clear they're filled from data.
     set(ws, "A2", "header(date,receipt,customer,address)", plain());
     set(ws, "B2", "Receipt #:", sb().bold().done());
-    param(ws, "C2", "22215", "receipt", plain());
+    param(ws, "C2", "NNNNN", "receipt", plain());
     set(ws, "D2", "Date:", sb().bold().right().done());
-    param(ws, "E2", "1/5/2009", "date", sb().right().done());
+    param(ws, "E2", "MM/DD/YYYY", "date", sb().right().done());
 
     set(ws, "A3", "header", plain());
     set(ws, "B3", "Sold To:", sb().bold().done());
-    param(ws, "C3", "Jose Maria Fernandez", "customer", plain());
+    param(ws, "C3", "Customer Name", "customer", plain());
     ws.add_merge_cells("C3:E3");
 
     set(ws, "A4", "header", plain());
-    param(
-        ws,
-        "C4",
-        "1010 Broadway, New York, NY 10010",
-        "address",
-        plain(),
-    );
+    param(ws, "C4", "Street, City, State ZIP", "address", plain());
     ws.add_merge_cells("C4:E4");
 
     // Row 5 — spacer.
@@ -84,27 +80,27 @@ pub fn sample_sales_receipt_template_bytes() -> Vec<u8> {
         sb().bold().right().fill(HEAD_FILL).done(),
     );
 
-    // Rows 7-8 — detail band: row1 (plain) and row2 (shaded). Amount is a
-    // native Excel formula over the real sample values.
+    // Rows 7-8 — detail band: row1 (plain) and row2 (shaded). Cells hold sample
+    // values; Amount is a native Excel formula over them.
     set(ws, "A7", "row1(seq,qty,desc,price)", plain());
-    param(ws, "B7", "1", "qty", sb().right().done());
-    param(ws, "C7", "Introduction to Algebra", "desc", plain());
-    param(ws, "D7", "53", "price", sb().right().fmt(CURRENCY).done());
+    param(ws, "B7", "2", "qty", sb().right().done());
+    param(ws, "C7", "Sample item", "desc", plain());
+    param(ws, "D7", "9.99", "price", sb().right().fmt(CURRENCY).done());
     setf(ws, "E7", "B7*D7", sb().right().fmt(CURRENCY).done());
 
     set(ws, "A8", "row2(seq,qty,desc,price)", plain());
-    param(ws, "B8", "1", "qty", sb().right().fill(SHADE).done());
+    param(ws, "B8", "3", "qty", sb().right().fill(SHADE).done());
     param(
         ws,
         "C8",
-        "Introduction to Algebra Solutions Manual",
+        "Another sample item",
         "desc",
         sb().fill(SHADE).done(),
     );
     param(
         ws,
         "D8",
-        "14",
+        "4.99",
         "price",
         sb().right().fill(SHADE).fmt(CURRENCY).done(),
     );
@@ -131,7 +127,7 @@ pub fn sample_sales_receipt_template_bytes() -> Vec<u8> {
     param(
         ws,
         "D11",
-        "0.0525",
+        "0.1",
         "taxrate",
         sb().right().fmt("0.00%").done(),
     );

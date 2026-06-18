@@ -1,9 +1,8 @@
 //! Excel-template mode — the faithful xforme workflow.
 //!
-//! Unlike the declarative engine in [`crate::engine`], here the **template is a
-//! real `.xlsx` workbook** designed in Excel/LibreOffice. The designer controls
-//! every style, number format, merge and *formula*; this engine only injects
-//! data and replicates the repeating rows.
+//! The **template is a real `.xlsx` workbook** designed in Excel/LibreOffice.
+//! The designer controls every style, number format, merge and *formula*; this
+//! engine only injects data and replicates the repeating rows.
 //!
 //! # Template convention
 //!
@@ -328,6 +327,7 @@ fn extract_template(book: &Workbook, sheet_name: &str) -> Result<TplModel> {
 struct Emit<'a> {
     tpl: &'a TplRow,
     fields: Vec<String>,
+    named: std::collections::BTreeMap<String, String>,
     out_row: u32,
 }
 
@@ -345,12 +345,12 @@ fn is_detail_label(label: &str) -> bool {
 }
 
 fn plan_rows<'a>(model: &'a TplModel, sheet: &Sheet) -> Plan<'a> {
-    let record_fields = |label: &str| -> Vec<String> {
+    let record_data = |label: &str| -> (Vec<String>, std::collections::BTreeMap<String, String>) {
         sheet
             .records
             .iter()
             .find(|rec| rec.label == label)
-            .map(|rec| rec.fields.clone())
+            .map(|rec| (rec.fields.clone(), rec.named.clone()))
             .unwrap_or_default()
     };
     let detail_records: Vec<&crate::data::Record> = sheet
@@ -380,19 +380,21 @@ fn plan_rows<'a>(model: &'a TplModel, sheet: &Sheet) -> Plan<'a> {
                 emits.push(Emit {
                     tpl,
                     fields: rec.fields.clone(),
+                    named: rec.named.clone(),
                     out_row,
                 });
                 out_row += 1;
             }
         } else {
-            let fields = if is_singleton_label(&row.label) {
-                record_fields(&row.label)
+            let (fields, named) = if is_singleton_label(&row.label) {
+                record_data(&row.label)
             } else {
-                Vec::new()
+                Default::default()
             };
             emits.push(Emit {
                 tpl: row,
                 fields,
+                named,
                 out_row,
             });
             out_row += 1;
@@ -431,7 +433,7 @@ fn write_output(book: &mut Workbook, title: &str, model: &TplModel, plan: &Plan)
                 cell.set_formula(formula::shift_rows(&tcell.content, delta));
             } else if let Some(param) = &tcell.param {
                 // Replace the sample value with the resolved data field.
-                cell.set_value(resolve_param(param, schema, &emit.fields));
+                cell.set_value(resolve_param(param, schema, &emit.fields, &emit.named));
             } else {
                 // Static cell — keep the designer's literal value.
                 cell.set_value(tcell.content.clone());
@@ -446,17 +448,28 @@ fn write_output(book: &mut Workbook, title: &str, model: &TplModel, plan: &Plan)
     Ok(())
 }
 
-/// Resolve a parameter to its data value: `#name` via the label's schema,
-/// `#N` positionally. Missing bindings resolve to the empty string.
-fn resolve_param(param: &Param, schema: Option<&Vec<String>>, fields: &[String]) -> String {
-    let index = match param {
-        Param::Indexed(n) => Some(n - 1),
-        Param::Named(name) => schema.and_then(|names| names.iter().position(|x| x == name)),
-    };
-    index
-        .and_then(|i| fields.get(i))
-        .cloned()
-        .unwrap_or_default()
+/// Resolve a parameter to its data value. A `#name` is looked up first in the
+/// record's **named** fields (JSON/YAML), then via the label's positional
+/// schema; `#N` is positional. Missing bindings resolve to the empty string.
+fn resolve_param(
+    param: &Param,
+    schema: Option<&Vec<String>>,
+    fields: &[String],
+    named: &std::collections::BTreeMap<String, String>,
+) -> String {
+    match param {
+        Param::Indexed(n) => fields.get(n - 1).cloned().unwrap_or_default(),
+        Param::Named(name) => {
+            if let Some(v) = named.get(name) {
+                return v.clone();
+            }
+            schema
+                .and_then(|names| names.iter().position(|x| x == name))
+                .and_then(|i| fields.get(i))
+                .cloned()
+                .unwrap_or_default()
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -557,21 +570,40 @@ mod tests {
 
     #[test]
     fn resolves_named_and_indexed_params() {
+        use std::collections::BTreeMap;
         let schema = vec!["date".to_string(), "receipt".to_string()];
         let fields = vec!["1/5/2009".to_string(), "22215".to_string()];
+        let empty = BTreeMap::new();
+
+        // Positional: by schema name and by index.
         assert_eq!(
-            resolve_param(&Param::Named("receipt".into()), Some(&schema), &fields),
+            resolve_param(
+                &Param::Named("receipt".into()),
+                Some(&schema),
+                &fields,
+                &empty
+            ),
             "22215"
         );
         assert_eq!(
-            resolve_param(&Param::Indexed(1), Some(&schema), &fields),
+            resolve_param(&Param::Indexed(1), Some(&schema), &fields, &empty),
             "1/5/2009"
         );
+
+        // Named data takes precedence and needs no schema/positional fields.
+        let named: BTreeMap<String, String> = [("receipt".to_string(), "99999".to_string())]
+            .into_iter()
+            .collect();
+        assert_eq!(
+            resolve_param(&Param::Named("receipt".into()), None, &[], &named),
+            "99999"
+        );
+
         // Unknown name or out-of-range index → empty.
         assert_eq!(
-            resolve_param(&Param::Named("nope".into()), Some(&schema), &fields),
+            resolve_param(&Param::Named("nope".into()), Some(&schema), &fields, &empty),
             ""
         );
-        assert_eq!(resolve_param(&Param::Indexed(9), None, &fields), "");
+        assert_eq!(resolve_param(&Param::Indexed(9), None, &fields, &empty), "");
     }
 }

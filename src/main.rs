@@ -82,7 +82,7 @@ fn parse_args() -> Result<Args, String> {
 fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     let raw =
         std::fs::read_to_string(&args.data).map_err(|e| format!("reading {}: {e}", args.data))?;
-    let sheets = data::parse(&raw)?;
+    let sheets = parse_data(&args.data, &raw)?;
     let sheet = sheets.first().ok_or("data file contained no sheets")?;
 
     let prefix = args
@@ -95,14 +95,39 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
     println!("Wrote {xlsx_path} (template tab removed, formulas live)");
 
     if args.pdf {
-        match convert_to_pdf(&xlsx_path) {
-            Ok(pdf_path) => println!("Wrote {pdf_path}"),
-            Err(e) => eprintln!(
-                "note: skipped PDF ({e}). Install LibreOffice, or open {xlsx_path} and export to PDF."
-            ),
-        }
+        emit_pdf(&xlsx_path);
     }
     Ok(())
+}
+
+/// Parse the data file, choosing the format by extension: `.json` and
+/// `.yaml`/`.yml` use the serde parsers (when their features are enabled);
+/// everything else is the tab-delimited format.
+fn parse_data(path: &str, raw: &str) -> Result<Vec<data::Sheet>, Box<dyn std::error::Error>> {
+    let ext = Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    match ext.as_str() {
+        "json" => {
+            #[cfg(feature = "json")]
+            {
+                return data::parse_json(raw);
+            }
+            #[cfg(not(feature = "json"))]
+            return Err("built without the `json` feature".into());
+        }
+        "yaml" | "yml" => {
+            #[cfg(feature = "yaml")]
+            {
+                return data::parse_yaml(raw);
+            }
+            #[cfg(not(feature = "yaml"))]
+            return Err("built without the `yaml` feature".into());
+        }
+        _ => Ok(data::parse(raw)?),
+    }
 }
 
 /// Default output prefix: the data file's stem, or `output`.
@@ -114,54 +139,21 @@ fn default_prefix(data_path: &str) -> String {
         .to_string()
 }
 
-/// Convert a spreadsheet to PDF using a headless LibreOffice, the modern
-/// equivalent of the original's iText spreadsheet->PDF step. LibreOffice
-/// recalculates the live formulas during conversion.
-fn convert_to_pdf(xlsx_path: &str) -> Result<String, Box<dyn std::error::Error>> {
-    let soffice = which_soffice().ok_or("LibreOffice (soffice) not found on PATH")?;
-
-    let path = Path::new(xlsx_path);
-    let out_dir = path
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or(Path::new("."));
-
-    let output = std::process::Command::new(soffice)
-        .arg("--headless")
-        // Use an isolated profile so a running desktop instance doesn't lock us out.
-        .arg("-env:UserInstallation=file:///tmp/xforme_lo_profile")
-        .arg("--convert-to")
-        .arg("pdf")
-        .arg("--outdir")
-        .arg(out_dir)
-        .arg(path)
-        .output()?;
-
-    if !output.status.success() {
-        return Err(format!(
-            "soffice failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        )
-        .into());
+/// Convert the rendered `.xlsx` to PDF via LibreOffice (the `pdf` feature).
+#[cfg(feature = "pdf")]
+fn emit_pdf(xlsx_path: &str) {
+    match xforme::pdf::to_pdf_file(xlsx_path) {
+        Ok(pdf) => println!("Wrote {}", pdf.display()),
+        Err(e) => eprintln!(
+            "note: skipped PDF ({e}). Install LibreOffice, or open {xlsx_path} and export to PDF."
+        ),
     }
-
-    let pdf_path = path.with_extension("pdf");
-    if !pdf_path.exists() {
-        return Err("soffice reported success but no PDF was produced".into());
-    }
-    Ok(pdf_path.to_string_lossy().into_owned())
 }
 
-fn which_soffice() -> Option<String> {
-    for candidate in ["soffice", "libreoffice"] {
-        if std::process::Command::new(candidate)
-            .arg("--version")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-        {
-            return Some(candidate.to_string());
-        }
-    }
-    None
+/// Without the `pdf` feature the binary emits `.xlsx` only.
+#[cfg(not(feature = "pdf"))]
+fn emit_pdf(xlsx_path: &str) {
+    eprintln!(
+        "note: built without the `pdf` feature; wrote {xlsx_path} only — convert it yourself."
+    );
 }

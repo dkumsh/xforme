@@ -1,0 +1,26 @@
+template: SalesReceipt
+title: Sales Receipt
+records:
+  - label: header
+    date: "1/5/2009"
+    receipt: "22215"
+    customer: Jose Maria Fernandez
+    address: "1010 Broadway, New York, NY 10010"
+  - label: row1
+    qty: 1
+    desc: Introduction to Algebra
+    price: 53.0
+  - label: row2
+    qty: 1
+    desc: Introduction to Algebra Solutions Manual
+    price: 14.0
+  - label: row1
+    qty: 1
+    desc: Calculus and Analytic Geometry
+    price: 62.5
+  - label: row2
+    qty: 2
+    desc: Calculus Study Guide
+    price: 18.0
+  - label: footer
+    taxrate: 0.0525

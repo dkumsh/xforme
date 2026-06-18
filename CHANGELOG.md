@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-06-18
+
+Focused the project on the Excel-template workflow: fill a designer-authored
+`.xlsx` and produce `.xlsx` (with optional PDF). Removed the parallel
+code-defined ("declarative") engine.
+
+### Removed
+
+- The declarative engine and its modules (`engine`, `template`, `expr`, `value`,
+  `document`, `render`, `salesreceipt`) — code-defined templates rendered to
+  XLSX/PDF in pure Rust. It duplicated the Excel-template engine for `.xlsx`
+  output and required maintaining a separate hand-written PDF renderer.
+- Dependencies **`printpdf`** and **`rust_xlsxwriter`** (only used by the above).
+
+### Added
+
+- **`pdf` module** (Cargo feature `pdf`, on by default): optional PDF output by
+  converting a produced `.xlsx` with a headless **LibreOffice** —
+  `pdf::to_pdf_file` (file → file) and `pdf::to_pdf_bytes` (in-memory, via a
+  temp dir). Building with `default-features = false` yields an `.xlsx`-only
+  crate that cannot spawn a subprocess.
+- **JSON and YAML data inputs** (`data::parse_json` / `parse_yaml`, Cargo
+  features `json` / `yaml`, both on by default; YAML via `serde_norway`). Same
+  record-stream model as the tab-delimited format, but records carry **named**
+  fields resolved directly by `#name` (the column-A schema becomes optional). A
+  positional `fields` array is also accepted. The CLI selects the parser by file
+  extension (`.json` / `.yaml` / `.yml`, else tab-delimited).
+
+### Changed
+
+- The `.xlsx` is generated entirely in memory (`umya-spreadsheet`); PDF is a
+  downstream conversion of it (Excel-faithful, since LibreOffice recalculates
+  the formulas). The CLI emits both by default; `--no-pdf` skips the PDF.
+
 ## [0.1.1] - 2026-06-18
 
 Reworked Excel-template parameters so a template is a fully valid, designable

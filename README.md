@@ -1,54 +1,65 @@
 # xforme
 
 **A blazing-fast Rust engine that streams your data through ordinary Excel
-templates to mass-produce pixel-perfect spreadsheets and PDFs, formatting and
+templates to mass-produce richly-formatted `.xlsx` spreadsheets — formatting and
 formulas intact.**
 
 xforme is the Rust migration of [*templateIt*](https://templateit.sourceforge.net/)
 — the 2009 Java project by the same author — and its canonical
 [Sales Receipt](https://templateit.sourceforge.net/SalesReceipt.html) example.
 
-The idea: you describe a document once — as an ordinary Excel workbook or a
-declarative Rust template — then stream a data file through it to render
-**both a spreadsheet and a PDF**. The original templateIt used Apache POI for
-Excel output and iText for PDF.
+The idea: **design the document once as an ordinary Excel workbook**, then stream
+a data file (tab-delimited, JSON, or YAML) through it. The engine copies the template sheet into a
+new tab, fills the parameters, replicates the repeating rows, and removes the
+template tab — preserving every style, number format, merge and formula. The
+original templateIt used Apache POI for this; xforme uses
+[`umya-spreadsheet`](https://crates.io/crates/umya-spreadsheet).
 
-This port offers **two modes**:
+`.xlsx` is the product. **PDF, when you need it, is just a downstream conversion**
+of the produced spreadsheet (Excel "Save as PDF", or a headless LibreOffice — the
+CLI does the latter for you when LibreOffice is installed).
 
-1. **Declarative mode** — the template is defined in Rust code. Self-contained,
-   no external files, PDF drawn directly with `printpdf`.
-2. **Excel-template mode** — the faithful templateIt workflow: the template is a
-   real **`.xlsx` workbook designed in Excel** (styles, number formats, merges
-   and *formulas*). The engine fills a new tab with rendered data and removes the
-   template tab, exactly like the original.
+## Example
 
-| Original (Java, 2009) | This port (Rust) |
-| --------------------- | ---------------- |
-| Apache POI (read/write Excel) | [`umya-spreadsheet`](https://crates.io/crates/umya-spreadsheet) (Excel-template mode) + [`rust_xlsxwriter`](https://crates.io/crates/rust_xlsxwriter) (declarative mode) |
-| iText (PDF)           | LibreOffice headless convert (Excel-template mode) + [`printpdf`](https://crates.io/crates/printpdf) (declarative mode) |
-| Excel template workbook | a real `.xlsx` (Excel-template mode) **or** a declarative [`Template`](src/template.rs) value (declarative mode) |
+The **template** you design in Excel/LibreOffice — control labels in column A,
+**placeholder sample values** (`NNNNN`, `MM/DD/YYYY`, `Customer Name`,
+`Sample item`, …), live formulas, and the callouts showing each cell's `#name`
+comment that binds it to a data field (`templates/sales_receipt_template.xlsx`):
+
+![Sales Receipt template](images/template.png)
+
+Fed this tab-delimited **data file** (`data/sales_receipt.txt`):
+
+```text
+#sheet	SalesReceipt	Sales Receipt
+header	1/5/2009	22215	Jose Maria Fernandez	1010 Broadway, New York, NY 10010
+row1	1	1	Introduction to Algebra	53.0
+row2	2	1	Introduction to Algebra Solutions Manual	14.0
+row1	3	1	Calculus and Analytic Geometry	62.5
+row2	4	2	Calculus Study Guide	18.0
+footer	.0525
+##end
+```
+
+xforme renders the **report** — the placeholder samples replaced by the actual
+data (`22215`, `Jose Maria Fernandez`, …), column A and the parameter comments
+gone, the repeating rows expanded, and the formulas evaluated:
+
+![Rendered Sales Receipt](images/report.png)
 
 ## Pipeline
 
 ```text
-data file ──[data::parse]──▶ Sheet ─┐
-                                     ├─[engine::process]──▶ Document ──┬─[render_xlsx]──▶ .xlsx
-Template ────────────────────────────┘                                └─[render_pdf]───▶ .pdf
+data file ──[data::parse]──▶ Sheet ──┐
+                                     ├─[xlsx_template::render]──▶ .xlsx report
+template.xlsx ───────────────────────┘
 ```
 
-* **`data`** — parses the original tab-delimited stream format
-  (`#sheet` … records … `##end`).
-* **`template`** — the declarative model: output columns, the field names for
-  each record label, and a *band* of output rows to emit per label.
-* **`expr`** — a small arithmetic evaluator (`+ - * / ()`, identifiers) so the
-  template can express line totals (`qty * price`) and a grand total
-  (`subtotal + subtotal * taxrate`) without hard-coding them.
-* **`engine`** — walks the records, resolves `${...}` placeholders and
-  expressions against each record's fields plus running accumulators
-  (e.g. `subtotal`), and produces a fully-resolved `Document`.
-* **`render`** — two backends (`xlsx`, `pdf`) that consume the `Document` and
-  know nothing about templates or the data format.
-* **`salesreceipt`** — the bundled example template, built on the generic engine.
+* **`data`** — parses the tab-delimited stream format (`#sheet` … records … `##end`).
+* **`xlsx_template`** — reads the designer's `.xlsx`, fills a new tab from the
+  data, and removes the template tab; preserves styles, number formats, merges
+  and native formulas (via `umya-spreadsheet`).
+* **`demo_template`** — builds the bundled sample Sales Receipt template.
 
 ## Run it
 
@@ -58,13 +69,14 @@ file:
 ```sh
 cargo run -- --template TEMPLATE.xlsx --data DATA.txt [--out PREFIX] [--no-pdf]
 
-# e.g. with the bundled sample template + data:
+# e.g. with the bundled sample template + data (.txt, .json, or .yaml all work):
 cargo run -- --template templates/sales_receipt_template.xlsx --data data/sales_receipt.txt
+cargo run -- --template templates/sales_receipt_template.xlsx --data data/sales_receipt.yaml
 ```
 
 It writes `PREFIX.xlsx` (template tab removed, formulas live) and, unless
-`--no-pdf`, `PREFIX.pdf` via a headless LibreOffice when available. `PREFIX`
-defaults to the data file's stem.
+`--no-pdf`, also `PREFIX.pdf` via a headless LibreOffice when one is available.
+`PREFIX` defaults to the data file's stem.
 
 **The demo example is self-contained** — the Sales Receipt template and data are
 embedded at compile time with `include_bytes!` / `include_str!`, so it needs no
@@ -76,73 +88,148 @@ cargo run --example sales_receipt            # -> sales_receipt.xlsx
 cargo run --example sales_receipt out.xlsx   # choose the output path
 ```
 
-The embedded template is the committed asset
+The bundled template is the committed asset
 `templates/sales_receipt_template.xlsx` — edit it in Excel to change the design,
 or edit `src/demo_template.rs` and regenerate it:
 
 ```sh
 cargo run --bin make_sample_template  # regenerates templates/sales_receipt_template.xlsx
-cargo test                            # parser, evaluator, formula-shift, file + bytes e2e
+cargo test                            # parser, parameter resolution, formula-shift, e2e
 ```
 
-### Excel-template convention
+## Designing a template
 
-The template `.xlsx` is designed by hand in Excel/LibreOffice. The engine reads
-it (preserving all styling) via [`src/xlsx_template.rs`](src/xlsx_template.rs):
+A template is an **ordinary Excel/LibreOffice workbook** — you design it visually,
+the way you want the output to look, then add a few lightweight annotations that
+tell xforme what to fill and what to repeat. No Rust required to make a new
+document type.
 
-* **Column A of each row is a visible control label** (the column is hidden in
-  the output):
-  * `header` / `footer` — emitted once, fields from the matching data record;
-  * any other label (`row1`, `row2`, …) — a *detail* row; the contiguous run of
-    detail rows is the **detail band**, emitted once per detail data record,
-    matched by label (so alternating `row1`/`row2` styles interleave in data order);
-  * empty — a static row.
-* **Field-name schema** is declared once per label in the column-A text, e.g.
-  `header(date,receipt,customer,address)` (first declaration wins; bare `header`
-  rows attach to it).
-* **Parameters** are marked on a cell's **comment** — `#name` (looked up in the
-  label's schema) or `#N` (1-based). The cell holds a **real sample value**, so
-  formulas compute and number formats preview while you design; at render the
-  engine swaps in the data field. Excel's red comment markers show which cells
-  are parameters at a glance.
-* **Formulas** are written natively in Excel and stay valid Excel. When a
-  template row is replicated at a new output row, the engine row-shifts its
-  *relative* references (so `=B7*D7` becomes `=B12*D12`) while leaving
-  `$`-anchored rows untouched — exactly like Excel's own copy/fill.
-* **Totals over the variable-length detail band** use ordinary Excel mixed
-  anchoring. Write `=SUM(E$7:E8)` in the footer: the anchored start `E$7` stays
-  on the first detail row, while the relative end `E8` grows as the band expands
-  and the footer slides down — so it always covers every rendered detail row.
-  (This is how the original templateIt worked: it offset only the *relative*
-  parts of formula references when replicating cells.)
+**1. Lay out the document.** Type the labels, choose fonts, fills, borders,
+alignment, number formats, merge cells — exactly as a finished sample. Put
+**real sample values** in the cells that will carry data (a real date, quantity,
+price). This keeps the file a normal, openable workbook and lets formulas compute
+and number formats preview while you design.
 
-`templates/sales_receipt_template.xlsx` (built by the `make_sample_template`
-binary) is a worked example — edit it in Excel to change the receipt's design
-without touching any Rust.
+**2. Label each row's role in column A** (the control column — it's hidden in the
+output):
+- `header` — emitted once, filled from the `header` data record;
+- `footer` — emitted once, filled from the `footer` record;
+- a *detail* label like `row1` / `row2` — a repeating row; consecutive detail
+  rows form the **detail band**, emitted once per matching data record (alternate
+  `row1`/`row2` for banded striping);
+- leave it **blank** for a static row (title, column headers, spacers).
 
-## Data format
+**3. Declare each band's field names once**, in the label on the band's first
+row: `header(date,receipt,customer,address)`. This maps your `#name` parameters
+to the positional data fields. Bare `header` on the band's other rows just
+attaches them.
 
-Tab-delimited, line-oriented — identical to the original example:
+**4. Mark the data cells with a comment.** On each cell that should be filled
+from data, add a cell **comment** containing `#name` (a name from that row's
+schema) — or `#N` for the N-th field. Leave the sample value in the cell. xforme
+swaps in the data at render time and strips the comment. (Excel paints a red
+triangle on commented cells, so your parameters are visible at a glance.)
 
-```text
-#sheet	SalesReceipt	Sales Receipt
-header	1/5/2009	22215	Jose Maria Fernandez	1010 Broadway, New York, NY 10010
-row1	1	1	Introduction to Algebra	53.0
-row2	2	1	Introduction to Algebra Solutions Manual	14.0
-footer	.0525
-##end
+**5. Write formulas natively.** Use ordinary Excel formulas over real cells
+(`=B7*D7`). When a row is replicated downward, xforme shifts *relative* references
+automatically (`=B7*D7` → `=B12*D12`) and leaves `$`-anchored ones fixed. For a
+**total over the variable-length detail band**, use mixed anchoring —
+`=SUM(E$7:E8)` — so the anchored start stays put while the relative end grows to
+cover every rendered detail row.
+
+**6. Save as `.xlsx`.** That's the template. The output tab is named by the data
+stream's `#sheet` title; column A and the comments are gone, and the template
+sheet itself is removed.
+
+### Worked example
+
+The bundled `templates/sales_receipt_template.xlsx` is laid out like this.
+`«#x»` marks a cell **comment** (the parameter binding); everything else is the
+literal cell value or formula. The values shown are **placeholder samples** —
+they're replaced by the data fields at render:
+
+| Row | A (control label) | B | C | D | E |
+|----|----|----|----|----|----|
+| 1  | | **SALES RECEIPT** — merged `B1:E1` | | | |
+| 2  | `header(date,receipt,customer,address)` | Receipt #: | `NNNNN` «#receipt» | Date: | `MM/DD/YYYY` «#date» |
+| 3  | `header` | Sold To: | `Customer Name` «#customer» — merged `C3:E3` | | |
+| 4  | `header` | | `Street, City, State ZIP` «#address» — merged `C4:E4` | | |
+| 5  | | | | | |
+| 6  | | **Qty** | **Description** | **Unit Price** | **Amount** |
+| 7  | `row1(seq,qty,desc,price)` | `2` «#qty» | `Sample item` «#desc» | `9.99` «#price» | `=B7*D7` |
+| 8  | `row2(seq,qty,desc,price)` | `3` «#qty» | `Another sample item` «#desc» | `4.99` «#price» | `=B8*D8` |
+| 9  | | | | | |
+| 10 | `footer(taxrate)` | | | Subtotal: | `=SUM(E$7:E8)` |
+| 11 | `footer` | | Sales Tax | `0.1` «#taxrate» (`0.00%`) | `=E10*D11` |
+| 12 | `footer` | | | TOTAL: | `=E10+E11` |
+
+Feed it the four line items below and the detail band (rows 7–8) expands to four
+output rows; the `SUM` grows to `=SUM(E$7:E10)`; tax and total slide down with it
+— all as live Excel formulas. (That's exactly the rendered report shown above.)
+
+### The rules, precisely
+
+* **Column A** is the visible control label; the column is hidden on output.
+  `header`/`footer` are once-only bands; any other non-empty label is a detail
+  row; empty is a static row. The contiguous run of detail rows is the detail
+  band, matched to records by label.
+* **Schema** `label(name1,name2,…)` is declared once per label in column A (first
+  declaration wins) and maps `#name` parameters to positional data fields.
+* **Parameters** live in cell **comments** (`#name` or `#N`); the cell keeps a
+  real sample value and is overwritten at render. Comments are stripped from the
+  output.
+* **Formulas** stay valid Excel; *relative* refs row-shift on replication,
+  `$`-anchored rows don't — so mixed anchoring (`=SUM(E$7:E8)`) makes totals grow
+  with the detail band. (This mirrors the original templateIt, which offset only
+  the relative parts of references when replicating cells.)
+* Formula results are computed by Excel/LibreOffice on open — xforme stores the
+  formula text, not a cached value.
+
+To tweak the bundled template, edit it in Excel, or edit
+[`src/demo_template.rs`](src/demo_template.rs) and regenerate it with
+`cargo run --bin make_sample_template`.
+
+## Data formats
+
+The CLI picks the parser by file extension: `.json`, `.yaml`/`.yml`, or
+tab-delimited otherwise (the library exposes `data::parse`, `parse_json`,
+`parse_yaml`). JSON/YAML are behind the default-on `json` / `yaml` features.
+
+**Tab-delimited** — line-oriented, the file shown in the [Example](#example)
+above. `#sheet <template> <title>` opens a sheet (the template name selects the
+sheet to fill, the title names the output tab); `##end` closes it. Each other
+line is a record: its first field is the label (matching a column-A label in the
+template), the rest are positional data fields (`#1`, `#2`, … in the template).
+
+**JSON / YAML** — the same record stream, but each record carries **named**
+fields, so a `#name` parameter resolves directly (the column-A schema is then
+optional). `data/sales_receipt.json` and `data/sales_receipt.yaml` are the
+equivalents of the TSV example:
+
+```yaml
+template: SalesReceipt
+title: Sales Receipt
+records:
+  - label: header
+    date: "1/5/2009"
+    receipt: "22215"
+    customer: Jose Maria Fernandez
+    address: "1010 Broadway, New York, NY 10010"
+  - { label: row1, qty: 1, desc: Introduction to Algebra, price: 53.0 }
+  - { label: row2, qty: 1, desc: Introduction to Algebra Solutions Manual, price: 14.0 }
+  - label: footer
+    taxrate: 0.0525
 ```
 
-`row1`/`row2` are alternating (banded) line-item styles; `footer`'s single
-field is the tax rate. The engine accumulates `qty * price` into `subtotal`,
-then the footer computes tax and total from it.
+(A record may also carry a positional `"fields": [...]` array for `#N` / TSV
+parity.)
 
 ## Library API
 
 xforme ships as **both a binary and a library** (`xforme = { path = "..." }`).
-The Excel-template engine accepts a template either by **file path** or as an
-**in-memory byte array** (anything `Into<TemplateSource>` — `&Path`, `&[u8]`,
-`&Vec<u8>`), and can write the report to a file or hand it back as bytes:
+The engine accepts a template either by **file path** or as an **in-memory byte
+array** (anything `Into<TemplateSource>` — `&Path`, `&[u8]`, `&Vec<u8>`), and can
+write the report to a file or hand it back as bytes:
 
 ```rust
 use std::path::Path;
@@ -168,18 +255,25 @@ let workbook = xlsx_template::render(template_bytes, sheet)?;
 | `render_to_file` | path or bytes | `.xlsx` file |
 | `render_to_bytes`| path or bytes | `Vec<u8>` |
 
-The declarative engine is library-only too:
-`engine::process(&template, sheet) -> Document`, then
-`render::render_xlsx(&doc, path)` / `render::render_pdf(&doc, path)`.
+### PDF (optional)
 
-PDF for the Excel-template path is left to the caller (the binary shells out to
-LibreOffice); the library returns the spreadsheet so you can convert it however
-you like.
+PDF output is behind the **`pdf` Cargo feature (on by default)** and is produced
+by converting the rendered `.xlsx` with a **headless LibreOffice** — the only way
+to get an Excel-faithful PDF (formulas evaluated, formatting/pagination applied)
+without reimplementing Excel:
 
-## Extending it
+```rust
+# #[cfg(feature = "pdf")]
+# fn demo() -> Result<(), Box<dyn std::error::Error>> {
+use xforme::pdf;
 
-The declarative engine is generic — the Sales Receipt is just one `Template`. To
-make a new document type, define a `Template` (columns, per-label field names,
-and bands of `CellSpec`s using `Literal` / `Text` / `Expr` content) and feed it a
-matching data stream. No engine changes required. For the Excel-template engine,
-just design a new `.xlsx` — no Rust changes at all.
+let pdf_path = pdf::to_pdf_file("report.xlsx")?;   // file -> file (next to it)
+let pdf_bytes = pdf::to_pdf_bytes(&report_xlsx)?;  // bytes -> bytes (temp dir inside)
+# Ok(())
+# }
+```
+
+It requires LibreOffice (`soffice`) on `PATH` and spawns it as a subprocess
+(LibreOffice reads files, so `to_pdf_bytes` round-trips through a temp dir). For
+an `.xlsx`-only crate that can't spawn a subprocess, depend with
+`default-features = false`.
