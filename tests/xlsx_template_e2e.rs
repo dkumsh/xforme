@@ -97,6 +97,30 @@ fn renders_template_to_report() {
 }
 
 #[test]
+fn warns_on_unmatched_data_label() {
+    let dir = std::env::temp_dir();
+    let tpl = dir.join("xforme_warn_tmpl.xlsx");
+    build_template(&tpl);
+
+    // `widget` matches no template label (the template has header/item/footer).
+    let raw = "#sheet\tTmpl\tReport\n\
+               header\tTitle\n\
+               item\t1\n\
+               widget\t9\n\
+               footer\n\
+               ##end\n";
+    let sheet = &data::parse(raw).unwrap()[0];
+    let bytes = std::fs::read(&tpl).unwrap();
+    let (_book, warnings) =
+        xforme::xlsx_template::render_with_warnings(bytes.as_slice(), sheet).unwrap();
+    assert!(
+        warnings.iter().any(|w| w.contains("widget")),
+        "expected a warning about `widget`, got: {warnings:?}"
+    );
+    let _ = std::fs::remove_file(&tpl);
+}
+
+#[test]
 fn renders_template_from_bytes() {
     // Build a template on disk, then feed its *bytes* to the engine — no file
     // path involved in rendering, and the output is collected as bytes too.

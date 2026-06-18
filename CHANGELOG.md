@@ -34,12 +34,16 @@ code-defined ("declarative") engine.
   fields resolved directly by `#name` (the column-A schema becomes optional). A
   positional `fields` array is also accepted. The CLI selects the parser by file
   extension (`.json` / `.yaml` / `.yml`, else tab-delimited).
+- **Non-fatal warnings** via `render_with_warnings`: a data record whose label
+  matches no template row is reported (the CLI prints them to stderr) instead of
+  being silently ignored. `render_to_file` now returns the warnings.
 
 ### Changed
 
 - The `.xlsx` is generated entirely in memory (`umya-spreadsheet`); PDF is a
   downstream conversion of it (Excel-faithful, since LibreOffice recalculates
   the formulas). The CLI emits both by default; `--no-pdf` skips the PDF.
+- Designer-set **row heights** on template rows are carried over to the output.
 
 ## [0.1.1] - 2026-06-18
 

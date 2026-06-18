@@ -98,9 +98,19 @@ impl<'a> From<&'a Vec<u8>> for TemplateSource<'a> {
 /// # }
 /// ```
 pub fn render<'a>(source: impl Into<TemplateSource<'a>>, sheet: &Sheet) -> Result<Workbook> {
+    Ok(render_with_warnings(source, sheet)?.0)
+}
+
+/// Like [`render`], but also returns non-fatal **warnings** (e.g. a data record
+/// whose label matches no template row, so its data is silently unused).
+pub fn render_with_warnings<'a>(
+    source: impl Into<TemplateSource<'a>>,
+    sheet: &Sheet,
+) -> Result<(Workbook, Vec<String>)> {
     let mut book = read_template(source.into())?;
 
     let model = extract_template(&book, &sheet.template)?;
+    let warnings = collect_warnings(&model, sheet);
     let plan = plan_rows(&model, sheet);
 
     // The model is fully owned now, so we can mutate the workbook freely.
@@ -114,20 +124,22 @@ pub fn render<'a>(source: impl Into<TemplateSource<'a>>, sheet: &Sheet) -> Resul
         sheet.title.trim()
     };
     write_output(&mut book, title, &model, &plan)?;
-    Ok(book)
+    Ok((book, warnings))
 }
 
-/// Render and save the report to `output_path`.
+/// Render and save the report to `output_path`, returning any [warnings].
+///
+/// [warnings]: render_with_warnings
 pub fn render_to_file<'a>(
     source: impl Into<TemplateSource<'a>>,
     sheet: &Sheet,
     output_path: impl AsRef<Path>,
-) -> Result<()> {
-    let book = render(source, sheet)?;
+) -> Result<Vec<String>> {
+    let (book, warnings) = render_with_warnings(source, sheet)?;
     let path = output_path.as_ref();
     umya_spreadsheet::writer::xlsx::write(&book, path)
         .map_err(|e| format!("writing {}: {e:?}", path.display()))?;
-    Ok(())
+    Ok(warnings)
 }
 
 /// Render the report and return it as `.xlsx` bytes — the in-memory counterpart
@@ -345,6 +357,29 @@ fn is_singleton_label(label: &str) -> bool {
 
 fn is_detail_label(label: &str) -> bool {
     !label.is_empty() && !is_singleton_label(label)
+}
+
+/// Non-fatal warnings: data records whose label matches no template row (their
+/// data is silently unused — usually a typo or a template/data mismatch).
+fn collect_warnings(model: &TplModel, sheet: &Sheet) -> Vec<String> {
+    use std::collections::HashSet;
+    let template_labels: HashSet<&str> = model
+        .rows
+        .iter()
+        .map(|r| r.label.as_str())
+        .filter(|l| !l.is_empty())
+        .collect();
+    let mut warnings = Vec::new();
+    let mut reported: HashSet<&str> = HashSet::new();
+    for rec in &sheet.records {
+        if !template_labels.contains(rec.label.as_str()) && reported.insert(rec.label.as_str()) {
+            warnings.push(format!(
+                "data label `{}` has no matching template row — those records are ignored",
+                rec.label
+            ));
+        }
+    }
+    warnings
 }
 
 fn plan_rows<'a>(model: &'a TplModel, sheet: &Sheet) -> Plan<'a> {

@@ -251,9 +251,12 @@ let workbook = xlsx_template::render(template_bytes, sheet)?;
 
 | Function | Template in | Report out |
 | -------- | ----------- | ---------- |
-| `render`         | path or bytes | `umya_spreadsheet::Workbook` |
-| `render_to_file` | path or bytes | `.xlsx` file |
-| `render_to_bytes`| path or bytes | `Vec<u8>` |
+| `render`               | path or bytes | `umya_spreadsheet::Workbook` |
+| `render_with_warnings` | path or bytes | `(Workbook, Vec<String>)` — warnings (e.g. data labels matching no template row) |
+| `render_to_file`       | path or bytes | `.xlsx` file (returns the warnings) |
+| `render_to_bytes`      | path or bytes | `Vec<u8>` |
+
+The CLI prints any warnings to stderr.
 
 ### PDF (optional)
 

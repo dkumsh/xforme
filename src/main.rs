@@ -91,7 +91,10 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|| default_prefix(&args.data));
     let xlsx_path = format!("{prefix}.xlsx");
 
-    xlsx_template::render_to_file(Path::new(&args.template), sheet, &xlsx_path)?;
+    let warnings = xlsx_template::render_to_file(Path::new(&args.template), sheet, &xlsx_path)?;
+    for w in &warnings {
+        eprintln!("warning: {w}");
+    }
     println!("Wrote {xlsx_path} (template tab removed, formulas live)");
 
     if args.pdf {
