@@ -1,0 +1,6 @@
+#sheet	SalesReceipt	Sales Receipt
+header	1/5/2009	22215	Jose Maria Fernandez	1010 Broadway, New York, NY 10010
+row1	1	1	Introduction to Algebra	53.0
+row2	2	1	Introduction to Algebra Solutions Manual	14.0
+footer	.0525
+##end

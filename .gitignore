@@ -1,0 +1,8 @@
+/target
+/.claude
+/.idea
+# Generated demo output
+/sales_receipt.xlsx
+/sales_receipt.pdf
+/report.xlsx
+/report.pdf
