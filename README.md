@@ -193,9 +193,10 @@ To tweak the bundled template, edit it in Excel, or edit
 
 ## Data formats
 
-The CLI picks the parser by file extension: `.json`, `.yaml`/`.yml`, or
+The CLI picks the parser by file extension: `.json`, `.yaml`/`.yml`, `.csv`, or
 tab-delimited otherwise (the library exposes `data::parse`, `parse_json`,
-`parse_yaml`). JSON/YAML are behind the default-on `json` / `yaml` features.
+`parse_yaml`, `parse_csv`). JSON/YAML/CSV are behind the default-on `json` /
+`yaml` / `csv` features.
 
 **Tab-delimited** — line-oriented, the file shown in the [Example](#example)
 above. `#sheet <template> <title>` opens a sheet (the template name selects the
@@ -226,7 +227,10 @@ records:
 (A record may also carry a positional `"fields": [...]` array for `#N` / TSV
 parity.)
 
-## Library API
+**CSV** — the same record stream as the tab-delimited format, just
+comma-separated with proper quoting (so a field can contain commas). The first
+cell is the label; `#sheet,<template>,<title>` opens a sheet, `##end` closes it;
+fields are positional. See `data/sales_receipt.csv`.
 
 xforme ships as **both a binary and a library** (`xforme = { path = "..." }`).
 The engine accepts a template either by **file path** or as an **in-memory byte

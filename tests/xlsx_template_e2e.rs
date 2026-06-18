@@ -262,7 +262,7 @@ fn preserves_and_grows_conditional_formatting() {
     let ws = book.sheet_by_name("Out").unwrap();
     let cf = ws.conditional_formatting_collection();
     assert_eq!(cf.len(), 1, "conditional formatting preserved");
-    let sqref = cf[0].get_sequence_of_references().get_sqref();
+    let sqref = cf[0].sequence_of_references().get_sqref();
     assert!(
         sqref.contains("B4"),
         "CF range grew with the band, got {sqref:?}"

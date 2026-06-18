@@ -18,9 +18,11 @@
 //! * Any other line is a record: the first field is its label, the remaining
 //!   tab-separated fields are its data.
 //!
-//! JSON and YAML inputs (Cargo features `json` / `yaml`) are also supported via
-//! [`parse_json`] / [`parse_yaml`]. They use the same record-stream model, but
-//! let each record carry **named** fields resolved directly by `#name`.
+//! JSON, YAML, and CSV inputs (Cargo features `json` / `yaml` / `csv`) are also
+//! supported via [`parse_json`] / [`parse_yaml`] / [`parse_csv`]. JSON/YAML use
+//! the same record-stream model but let each record carry **named** fields
+//! (resolved by `#name`); CSV is the record stream comma-separated with proper
+//! quoting.
 
 use std::collections::BTreeMap;
 
@@ -218,6 +220,64 @@ fn value_to_field(v: &serde_json::Value) -> Option<String> {
     }
 }
 
+/// Parse a CSV document — the same record-stream as the tab-delimited format,
+/// just comma-separated with proper quoting (so fields can contain commas). The
+/// first cell of each row is the label; `#sheet,<template>,<title>` opens a
+/// sheet and `##end` closes it. Fields are positional (`#N` / schema `#name`).
+#[cfg(feature = "csv")]
+pub fn parse_csv(input: &str) -> Result<Vec<Sheet>, Box<dyn std::error::Error>> {
+    let mut reader = csv::ReaderBuilder::new()
+        .has_headers(false)
+        .flexible(true) // rows have varying field counts
+        .from_reader(input.as_bytes());
+
+    let mut sheets = Vec::new();
+    let mut current: Option<Sheet> = None;
+    for result in reader.records() {
+        let record = result?;
+        let mut fields: Vec<String> = record.iter().map(|s| s.trim().to_string()).collect();
+        if fields.iter().all(String::is_empty) {
+            continue;
+        }
+        match fields[0].as_str() {
+            "#sheet" => {
+                let template = fields.get(1).cloned().unwrap_or_default();
+                if template.is_empty() {
+                    return Err("`#sheet` row is missing a template name".into());
+                }
+                let title = fields.get(2).cloned().unwrap_or_default();
+                if let Some(sheet) = current.take() {
+                    sheets.push(sheet);
+                }
+                current = Some(Sheet {
+                    template,
+                    title,
+                    records: Vec::new(),
+                });
+            }
+            "##end" => match current.take() {
+                Some(sheet) => sheets.push(sheet),
+                None => return Err("`##end` without an open `#sheet`".into()),
+            },
+            _ => {
+                let sheet = current
+                    .as_mut()
+                    .ok_or("data does not start with a `#sheet` row")?;
+                let label = fields.remove(0);
+                sheet.records.push(Record {
+                    label,
+                    fields,
+                    ..Default::default()
+                });
+            }
+        }
+    }
+    if let Some(sheet) = current.take() {
+        sheets.push(sheet);
+    }
+    Ok(sheets)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -276,6 +336,28 @@ mod tests {
         assert_eq!(s.records[1].named["qty"], "2"); // integer
         assert_eq!(s.records[1].named["price"], "9.99"); // float
         assert_eq!(s.records[1].label, "row1");
+    }
+
+    #[cfg(feature = "csv")]
+    #[test]
+    fn parses_csv_record_stream() {
+        // A quoted field contains commas — must stay one field.
+        let src = "#sheet,SalesReceipt,Sales Receipt\n\
+                   header,1/5/2009,22215,Jose,\"1010 Broadway, NY\"\n\
+                   row1,1,1,Algebra,53.0\n\
+                   footer,.0525\n\
+                   ##end\n";
+        let sheets = parse_csv(src).unwrap();
+        assert_eq!(sheets.len(), 1);
+        let s = &sheets[0];
+        assert_eq!(s.template, "SalesReceipt");
+        assert_eq!(s.title, "Sales Receipt");
+        assert_eq!(s.records[0].label, "header");
+        assert_eq!(
+            s.records[0].fields,
+            vec!["1/5/2009", "22215", "Jose", "1010 Broadway, NY"]
+        );
+        assert_eq!(s.records[2].label, "footer");
     }
 
     #[cfg(feature = "yaml")]

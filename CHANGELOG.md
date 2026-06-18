@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.2.0] - 2026-06-18
+## [0.2.0] - 2026-06-20
 
 Focused the project on the Excel-template workflow: fill a designer-authored
 `.xlsx` and produce `.xlsx` (with optional PDF). Removed the parallel
@@ -28,12 +28,14 @@ code-defined ("declarative") engine.
   `pdf::to_pdf_file` (file → file) and `pdf::to_pdf_bytes` (in-memory, via a
   temp dir). Building with `default-features = false` yields an `.xlsx`-only
   crate that cannot spawn a subprocess.
-- **JSON and YAML data inputs** (`data::parse_json` / `parse_yaml`, Cargo
-  features `json` / `yaml`, both on by default; YAML via `serde_norway`). Same
-  record-stream model as the tab-delimited format, but records carry **named**
-  fields resolved directly by `#name` (the column-A schema becomes optional). A
-  positional `fields` array is also accepted. The CLI selects the parser by file
-  extension (`.json` / `.yaml` / `.yml`, else tab-delimited).
+- **JSON, YAML, and CSV data inputs** (`data::parse_json` / `parse_yaml` /
+  `parse_csv`, Cargo features `json` / `yaml` / `csv`, all on by default; YAML
+  via `serde_norway`, CSV via `csv`). JSON/YAML use the same record-stream model
+  but records carry **named** fields resolved directly by `#name` (the column-A
+  schema becomes optional; a positional `fields` array is also accepted). CSV is
+  the record stream comma-separated with proper quoting. The CLI selects the
+  parser by file extension (`.json` / `.yaml` / `.yml` / `.csv`, else
+  tab-delimited).
 - **Non-fatal warnings** via `render_with_warnings`: a data record whose label
   matches no template row is reported (the CLI prints them to stderr) instead of
   being silently ignored. `render_to_file` now returns the warnings.

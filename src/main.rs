@@ -129,6 +129,14 @@ fn parse_data(path: &str, raw: &str) -> Result<Vec<data::Sheet>, Box<dyn std::er
             #[cfg(not(feature = "yaml"))]
             return Err("built without the `yaml` feature".into());
         }
+        "csv" => {
+            #[cfg(feature = "csv")]
+            {
+                return data::parse_csv(raw);
+            }
+            #[cfg(not(feature = "csv"))]
+            return Err("built without the `csv` feature".into());
+        }
         _ => Ok(data::parse(raw)?),
     }
 }

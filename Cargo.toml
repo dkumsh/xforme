@@ -14,17 +14,24 @@ keywords = ["excel", "xlsx", "template", "report", "spreadsheet"]
 categories = ["template-engine", "command-line-utilities"]
 
 [features]
-default = ["pdf", "json", "yaml"]
+default = ["pdf", "json", "yaml", "csv"]
 # Optional PDF output by converting the rendered .xlsx with a headless
 # LibreOffice. Pure-std (spawns a subprocess); disable for an xlsx-only crate
 # that can't execute subprocesses: `default-features = false`.
 pdf = []
-# JSON / YAML data inputs (in addition to the always-available tab-delimited
-# format). Each pulls a serde parser; disable to drop those dependencies.
+# JSON / YAML / CSV data inputs (in addition to the always-available
+# tab-delimited format). Each pulls a parser; disable to drop those deps.
 json = ["dep:serde_json"]
 yaml = ["dep:serde_json", "dep:serde_norway"]
+csv = ["dep:csv"]
 
 [dependencies]
 umya-spreadsheet = "3.0.0"
 serde_json = { version = "1", optional = true }
 serde_norway = { version = "0.9", optional = true }
+csv = { version = "1", optional = true }
+
+# The bundled demo embeds and parses sales_receipt.json, so it needs `json`.
+[[example]]
+name = "sales_receipt"
+required-features = ["json"]
