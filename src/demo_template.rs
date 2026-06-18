@@ -2,15 +2,20 @@
 //
 // This stands in for the workbook a *designer* would normally craft by hand in
 // Excel or LibreOffice. It exercises everything the Excel-template engine
-// preserves: column-A control tags, fonts/bold, alignment, fills, number
+// preserves: column-A control labels, fonts/bold, alignment, fills, number
 // formats, merged cells, and native Excel formulas (line totals, a SUM over the
 // variable-length detail band, tax and grand total).
+//
+// Parameters are bound through cell *comments* (`#name`); the cells hold real
+// sample values, so the template itself renders as a working sample receipt —
+// formulas compute and number formats preview. Column A declares each label's
+// field-name schema once, e.g. `header(date,receipt,customer,address)`.
 //
 // It is exposed as a library helper and used by the `make_sample_template`
 // binary to (re)generate the committed `templates/sales_receipt_template.xlsx`
 // asset, which the demo binary then embeds with `include_bytes!`.
 
-use umya_spreadsheet::{HorizontalAlignmentValues, Style};
+use umya_spreadsheet::{Comment, HorizontalAlignmentValues, Style};
 
 const SHADE: &str = "FFF2F2F2"; // banded row fill (ARGB)
 const HEAD_FILL: &str = "FFD9E1F2"; // column-header fill
@@ -23,7 +28,7 @@ pub fn sample_sales_receipt_template_bytes() -> Vec<u8> {
         .expect("rename sheet");
     let ws = book.sheet_by_name_mut("SalesReceipt").expect("sheet");
 
-    // Column widths: A is the (hidden-on-output) control-tag column.
+    // Column widths: A is the (hidden-on-output) control-label column.
     ws.column_dimension_mut("A").set_width(4.0);
     ws.column_dimension_mut("B").set_width(8.0);
     ws.column_dimension_mut("C").set_width(40.0);
@@ -39,25 +44,31 @@ pub fn sample_sales_receipt_template_bytes() -> Vec<u8> {
     );
     ws.add_merge_cells("B1:E1");
 
-    // Rows 2-4 — header band (fields: 1=date, 2=receipt, 3=customer, 4=address).
-    set(ws, "A2", "header", plain());
+    // Rows 2-4 — header band. Column A declares the field schema once.
+    set(ws, "A2", "header(date,receipt,customer,address)", plain());
     set(ws, "B2", "Receipt #:", sb().bold().done());
-    set(ws, "C2", "${2}", plain());
+    param(ws, "C2", "22215", "receipt", plain());
     set(ws, "D2", "Date:", sb().bold().right().done());
-    set(ws, "E2", "${1}", sb().right().done());
+    param(ws, "E2", "1/5/2009", "date", sb().right().done());
 
     set(ws, "A3", "header", plain());
     set(ws, "B3", "Sold To:", sb().bold().done());
-    set(ws, "C3", "${3}", plain());
+    param(ws, "C3", "Jose Maria Fernandez", "customer", plain());
     ws.add_merge_cells("C3:E3");
 
     set(ws, "A4", "header", plain());
-    set(ws, "C4", "${4}", plain());
+    param(
+        ws,
+        "C4",
+        "1010 Broadway, New York, NY 10010",
+        "address",
+        plain(),
+    );
     ws.add_merge_cells("C4:E4");
 
     // Row 5 — spacer.
 
-    // Row 6 — column headers.
+    // Row 6 — column headers (static).
     set(ws, "B6", "Qty", sb().bold().right().fill(HEAD_FILL).done());
     set(ws, "C6", "Description", sb().bold().fill(HEAD_FILL).done());
     set(
@@ -73,21 +84,28 @@ pub fn sample_sales_receipt_template_bytes() -> Vec<u8> {
         sb().bold().right().fill(HEAD_FILL).done(),
     );
 
-    // Rows 7-8 — the detail band: row1 (plain) and row2 (shaded). Fields:
-    // 1=seq, 2=qty, 3=desc, 4=price. Amount is a native Excel formula.
-    set(ws, "A7", "row1", plain());
-    set(ws, "B7", "${2}", sb().right().done());
-    set(ws, "C7", "${3}", plain());
-    set(ws, "D7", "${4}", sb().right().fmt(CURRENCY).done());
+    // Rows 7-8 — detail band: row1 (plain) and row2 (shaded). Amount is a
+    // native Excel formula over the real sample values.
+    set(ws, "A7", "row1(seq,qty,desc,price)", plain());
+    param(ws, "B7", "1", "qty", sb().right().done());
+    param(ws, "C7", "Introduction to Algebra", "desc", plain());
+    param(ws, "D7", "53", "price", sb().right().fmt(CURRENCY).done());
     setf(ws, "E7", "B7*D7", sb().right().fmt(CURRENCY).done());
 
-    set(ws, "A8", "row2", plain());
-    set(ws, "B8", "${2}", sb().right().fill(SHADE).done());
-    set(ws, "C8", "${3}", sb().fill(SHADE).done());
-    set(
+    set(ws, "A8", "row2(seq,qty,desc,price)", plain());
+    param(ws, "B8", "1", "qty", sb().right().fill(SHADE).done());
+    param(
+        ws,
+        "C8",
+        "Introduction to Algebra Solutions Manual",
+        "desc",
+        sb().fill(SHADE).done(),
+    );
+    param(
         ws,
         "D8",
-        "${4}",
+        "14",
+        "price",
         sb().right().fill(SHADE).fmt(CURRENCY).done(),
     );
     setf(
@@ -99,20 +117,24 @@ pub fn sample_sales_receipt_template_bytes() -> Vec<u8> {
 
     // Row 9 — spacer.
 
-    // Rows 10-12 — footer band. The subtotal sums the detail band via the
-    // ${firstrow}/${lastrow} markers; tax and total reference the cells above.
-    set(ws, "A10", "footer", plain());
+    // Rows 10-12 — footer band. The subtotal sums the detail band using Excel
+    // mixed anchoring: the start row `E$7` is anchored to the first detail row,
+    // the end row `E8` is relative to the last detail template row. As the band
+    // expands and the footer slides down, the relative end grows to cover every
+    // rendered detail row. Tax and total reference the cells above.
+    set(ws, "A10", "footer(taxrate)", plain());
     set(ws, "D10", "Subtotal:", sb().bold().right().done());
-    setf(
-        ws,
-        "E10",
-        "SUM(E${firstrow}:E${lastrow})",
-        sb().right().fmt(CURRENCY).done(),
-    );
+    setf(ws, "E10", "SUM(E$7:E8)", sb().right().fmt(CURRENCY).done());
 
     set(ws, "A11", "footer", plain());
     set(ws, "C11", "Sales Tax", sb().right().done());
-    set(ws, "D11", "${1}", sb().right().fmt("0.00%").done()); // tax rate
+    param(
+        ws,
+        "D11",
+        "0.0525",
+        "taxrate",
+        sb().right().fmt("0.00%").done(),
+    );
     setf(ws, "E11", "E10*D11", sb().right().fmt(CURRENCY).done());
 
     set(ws, "A12", "footer", plain());
@@ -129,7 +151,7 @@ pub fn sample_sales_receipt_template_bytes() -> Vec<u8> {
     buf
 }
 
-/// Set a cell's literal/placeholder value and style.
+/// Set a static cell's literal value and style.
 fn set(ws: &mut umya_spreadsheet::Worksheet, at: &str, value: &str, style: Style) {
     let cell = ws.cell_mut(at);
     cell.set_value(value);
@@ -141,6 +163,20 @@ fn setf(ws: &mut umya_spreadsheet::Worksheet, at: &str, formula: &str, style: St
     let cell = ws.cell_mut(at);
     cell.set_formula(formula);
     cell.set_style(style);
+}
+
+/// Set a parameter cell: a real sample `value` (so formulas/formats work) plus
+/// a `#name` comment that binds it to a data field at render time.
+fn param(ws: &mut umya_spreadsheet::Worksheet, at: &str, value: &str, name: &str, style: Style) {
+    {
+        let cell = ws.cell_mut(at);
+        cell.set_value(value);
+        cell.set_style(style);
+    }
+    let mut comment = Comment::default();
+    comment.new_comment(at);
+    comment.set_text_string(format!("#{name}"));
+    ws.add_comments(comment);
 }
 
 fn plain() -> Style {

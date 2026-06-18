@@ -7,25 +7,37 @@
 //!
 //! # Template convention
 //!
-//! * **Column A of each template row is a control tag** (it is hidden in the
-//!   output): one of
+//! * **Column A of each template row carries a visible control label** (the
+//!   column is hidden in the output):
 //!   * `header`  — emitted once, fields come from the `header` data record;
 //!   * `footer`  — emitted once, fields come from the `footer` data record;
-//!   * any other non-empty tag (e.g. `row1`, `row2`) — a *detail* row. The
+//!   * any other non-empty label (e.g. `row1`, `row2`) — a *detail* row. The
 //!     contiguous run of detail template rows forms the **detail band**; the
 //!     engine emits one output row per detail data record, choosing the
-//!     template row whose tag matches the record's label (so `row1`/`row2`
+//!     template row whose label matches the record's label (so `row1`/`row2`
 //!     alternating styles interleave in data order);
 //!   * empty — a static row, emitted once verbatim.
-//! * **Placeholders** `${n}` (1-based) inject the n-th field of the row's data
-//!   record. `${firstrow}` / `${lastrow}` expand to the first/last output row
-//!   of the detail band (for aggregate ranges); `${row}` is the current output
-//!   row.
-//! * **Formulas** are authored natively in Excel. When a template row lands at a
-//!   different output row, the engine shifts each *relative* cell reference's
-//!   row component by the same delta, so `=B7*D7` on template row 7 becomes
-//!   `=B12*D12` if emitted on row 12. Use `${firstrow}`/`${lastrow}` for ranges
-//!   that span the (variable-length) detail band.
+//! * **Field-name schema** is declared once per label, in the column-A text:
+//!   `header(date,receipt,customer,address)`. The first declaration of a label
+//!   wins; bare `header` rows just attach to it. The schema maps `#name`
+//!   parameters to positional data fields.
+//! * **Parameters** are marked on a cell's **comment** — `#name` (resolved via
+//!   the label's schema) or `#N` (1-based positional). The cell itself keeps a
+//!   **real sample value**, so formulas compute and number formats preview while
+//!   designing; at render the engine swaps in the data field. Excel's red
+//!   comment markers make parameter cells visible at a glance.
+//! * **Formulas** are authored natively in Excel and stay valid Excel. When a
+//!   template row lands at a different output row, the engine shifts each
+//!   *relative* cell reference's row by that row's delta, leaving `$`-anchored
+//!   rows fixed — exactly like Excel's own copy/fill. So `=B7*D7` on template
+//!   row 7 becomes `=B12*D12` on row 12.
+//! * **Totals over the variable-length detail band** use ordinary Excel mixed
+//!   anchoring: write `=SUM(E$7:E8)` in the footer, with the start row anchored
+//!   to the first detail row and the end row relative to the last detail
+//!   template row. As the band expands and the footer slides down, the relative
+//!   end grows to cover every rendered detail row while the anchored start stays
+//!   put. (This mirrors the original templateIt, which offset only the relative
+//!   parts of references when replicating cells.)
 //!
 //! The output workbook gets a new sheet (named after the data stream's sheet
 //! title) holding the rendered result, and the template sheet is removed.
@@ -148,18 +160,33 @@ fn read_template(source: TemplateSource) -> Result<Workbook> {
 // Template extraction
 // ---------------------------------------------------------------------------
 
+/// A parameter binding declared on a cell's *comment*. The cell keeps a real
+/// sample value (so formulas compute and formatting previews); at render time
+/// the engine replaces that value with the matching data field.
+enum Param {
+    /// `#name` — resolved against the row label's declared field-name schema.
+    Named(String),
+    /// `#N` — the N-th data field, 1-based.
+    Indexed(usize),
+}
+
 /// A single template cell, with its style cloned out of the workbook.
 struct TplCell {
     col: u32,
+    /// The cell's literal value, or its formula text when `is_formula`.
     content: String,
     is_formula: bool,
+    /// Set when the cell's comment marked it as a data parameter.
+    param: Option<Param>,
     style: Style,
 }
 
-/// A template row: its control tag plus content cells and any single-row merges.
+/// A template row: its control label plus content cells and any single-row merges.
 struct TplRow {
     row: u32,
-    tag: String,
+    /// The control label parsed from column A (`header`, `row1`, `footer`, …,
+    /// or empty for a static row), with any `(field,names)` schema stripped off.
+    label: String,
     cells: Vec<TplCell>,
     /// Horizontal merges on this row, as `(start_col, end_col)`.
     merges: Vec<(u32, u32)>,
@@ -170,9 +197,50 @@ struct TplModel {
     rows: Vec<TplRow>,
     /// `(column_number, width)` for every column that declares a width.
     col_widths: Vec<(u32, f64)>,
+    /// Ordered field names declared per label, e.g.
+    /// `header → [date, receipt, customer, address]`. Used to resolve `#name`
+    /// parameters to positional data fields.
+    schemas: std::collections::HashMap<String, Vec<String>>,
 }
 
 const TAG_COL: u32 = 1;
+
+/// Parse a column-A control cell into `(label, optional field-name schema)`.
+/// `"header(date,receipt,customer)"` → `("header", Some([date,receipt,customer]))`;
+/// `"header"` → `("header", None)`.
+fn parse_tag(raw: &str) -> (String, Option<Vec<String>>) {
+    let raw = raw.trim();
+    if let Some(open) = raw.find('(')
+        && raw.ends_with(')')
+    {
+        let label = raw[..open].trim().to_string();
+        let names = raw[open + 1..raw.len() - 1]
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        return (label, Some(names));
+    }
+    (raw.to_string(), None)
+}
+
+/// Parse a parameter marker out of a cell comment: `#name` → [`Param::Named`],
+/// `#3` → [`Param::Indexed`]. Returns `None` if there is no `#token`.
+fn parse_param(comment: &str) -> Option<Param> {
+    let hash = comment.find('#')?;
+    let token: String = comment[hash + 1..]
+        .chars()
+        .take_while(|c| c.is_alphanumeric() || *c == '_')
+        .collect();
+    if token.is_empty() {
+        return None;
+    }
+    match token.parse::<usize>() {
+        Ok(n) if n >= 1 => Some(Param::Indexed(n)),
+        Ok(_) => None,
+        Err(_) => Some(Param::Named(token)),
+    }
+}
 
 fn extract_template(book: &Workbook, sheet_name: &str) -> Result<TplModel> {
     let ws = book
@@ -189,9 +257,28 @@ fn extract_template(book: &Workbook, sheet_name: &str) -> Result<TplModel> {
         }
     }
 
+    // Index parameter markers by their (col, row), read from cell comments.
+    let mut params_by_cell: std::collections::HashMap<(u32, u32), Param> = Default::default();
+    for comment in ws.comments() {
+        let text = comment
+            .text()
+            .text()
+            .map(|t| t.value().to_string())
+            .unwrap_or_default();
+        if let Some(param) = parse_param(&text) {
+            let co = comment.coordinate();
+            params_by_cell.insert((co.col_num(), co.row_num()), param);
+        }
+    }
+
     let mut rows = Vec::new();
+    let mut schemas: std::collections::HashMap<String, Vec<String>> = Default::default();
     for r in 1..=max_row {
-        let tag = ws.value(coord(TAG_COL, r)).trim().to_string();
+        let (label, schema) = parse_tag(&ws.value(coord(TAG_COL, r)));
+        // First declaration of a label's field schema wins.
+        if let Some(names) = schema {
+            schemas.entry(label.clone()).or_insert(names);
+        }
         let mut cells = Vec::new();
         for c in (TAG_COL + 1)..=max_col {
             if let Some(cell) = ws.cell(coord(c, r)) {
@@ -205,13 +292,14 @@ fn extract_template(book: &Workbook, sheet_name: &str) -> Result<TplModel> {
                     col: c,
                     content,
                     is_formula,
+                    param: params_by_cell.remove(&(c, r)),
                     style: cell.style().clone(),
                 });
             }
         }
         rows.push(TplRow {
             row: r,
-            tag,
+            label,
             cells,
             merges: merges_by_row.remove(&r).unwrap_or_default(),
         });
@@ -224,7 +312,11 @@ fn extract_template(book: &Workbook, sheet_name: &str) -> Result<TplModel> {
         }
     }
 
-    Ok(TplModel { rows, col_widths })
+    Ok(TplModel {
+        rows,
+        col_widths,
+        schemas,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -241,17 +333,15 @@ struct Emit<'a> {
 
 struct Plan<'a> {
     emits: Vec<Emit<'a>>,
-    detail_first: Option<u32>,
-    detail_last: Option<u32>,
 }
 
-/// Tags that denote a once-only band rather than a repeating detail row.
-fn is_singleton_tag(tag: &str) -> bool {
-    matches!(tag, "header" | "footer")
+/// Labels that denote a once-only band rather than a repeating detail row.
+fn is_singleton_label(label: &str) -> bool {
+    matches!(label, "header" | "footer")
 }
 
-fn is_detail_tag(tag: &str) -> bool {
-    !tag.is_empty() && !is_singleton_tag(tag)
+fn is_detail_label(label: &str) -> bool {
+    !label.is_empty() && !is_singleton_label(label)
 }
 
 fn plan_rows<'a>(model: &'a TplModel, sheet: &Sheet) -> Plan<'a> {
@@ -266,33 +356,27 @@ fn plan_rows<'a>(model: &'a TplModel, sheet: &Sheet) -> Plan<'a> {
     let detail_records: Vec<&crate::data::Record> = sheet
         .records
         .iter()
-        .filter(|rec| is_detail_tag(&rec.label))
+        .filter(|rec| is_detail_label(&rec.label))
         .collect();
 
     let mut emits = Vec::new();
     let mut out_row: u32 = 1;
-    let mut detail_first = None;
-    let mut detail_last = None;
 
     let mut i = 0;
     while i < model.rows.len() {
         let row = &model.rows[i];
-        if is_detail_tag(&row.tag) {
+        if is_detail_label(&row.label) {
             // Gather the contiguous detail band.
             let band_start = i;
-            while i < model.rows.len() && is_detail_tag(&model.rows[i].tag) {
+            while i < model.rows.len() && is_detail_label(&model.rows[i].label) {
                 i += 1;
             }
             let band = &model.rows[band_start..i];
             for rec in &detail_records {
                 let tpl = band
                     .iter()
-                    .find(|tr| tr.tag == rec.label)
+                    .find(|tr| tr.label == rec.label)
                     .unwrap_or(&band[0]);
-                if detail_first.is_none() {
-                    detail_first = Some(out_row);
-                }
-                detail_last = Some(out_row);
                 emits.push(Emit {
                     tpl,
                     fields: rec.fields.clone(),
@@ -301,8 +385,8 @@ fn plan_rows<'a>(model: &'a TplModel, sheet: &Sheet) -> Plan<'a> {
                 out_row += 1;
             }
         } else {
-            let fields = if is_singleton_tag(&row.tag) {
-                record_fields(&row.tag)
+            let fields = if is_singleton_label(&row.label) {
+                record_fields(&row.label)
             } else {
                 Vec::new()
             };
@@ -316,11 +400,7 @@ fn plan_rows<'a>(model: &'a TplModel, sheet: &Sheet) -> Plan<'a> {
         }
     }
 
-    Plan {
-        emits,
-        detail_first,
-        detail_last,
-    }
+    Plan { emits }
 }
 
 // ---------------------------------------------------------------------------
@@ -340,18 +420,21 @@ fn write_output(book: &mut Workbook, title: &str, model: &TplModel, plan: &Plan)
 
     for emit in &plan.emits {
         let delta = emit.out_row as i64 - emit.tpl.row as i64;
+        let schema = model.schemas.get(&emit.tpl.label);
         for tcell in &emit.tpl.cells {
             let at = coord(tcell.col, emit.out_row);
             let cell = ws.cell_mut(at.as_str());
             cell.set_style(tcell.style.clone());
 
             if tcell.is_formula {
-                let shifted = formula::shift_rows(&tcell.content, delta);
-                let resolved = substitute(&shifted, &emit.fields, emit.out_row, plan);
-                cell.set_formula(resolved);
+                // Formulas are valid Excel; just shift relative references.
+                cell.set_formula(formula::shift_rows(&tcell.content, delta));
+            } else if let Some(param) = &tcell.param {
+                // Replace the sample value with the resolved data field.
+                cell.set_value(resolve_param(param, schema, &emit.fields));
             } else {
-                let resolved = substitute(&tcell.content, &emit.fields, emit.out_row, plan);
-                cell.set_value(resolved);
+                // Static cell — keep the designer's literal value.
+                cell.set_value(tcell.content.clone());
             }
         }
         for &(c1, c2) in &emit.tpl.merges {
@@ -363,39 +446,17 @@ fn write_output(book: &mut Workbook, title: &str, model: &TplModel, plan: &Plan)
     Ok(())
 }
 
-/// Replace `${...}` placeholders in `text`.
-fn substitute(text: &str, fields: &[String], out_row: u32, plan: &Plan) -> String {
-    let mut out = String::with_capacity(text.len());
-    let bytes = text.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'$'
-            && i + 1 < bytes.len()
-            && bytes[i + 1] == b'{'
-            && let Some(end) = text[i + 2..].find('}')
-        {
-            let key = text[i + 2..i + 2 + end].trim();
-            out.push_str(&resolve_key(key, fields, out_row, plan));
-            i = i + 2 + end + 1;
-            continue;
-        }
-        let ch = text[i..].chars().next().unwrap();
-        out.push(ch);
-        i += ch.len_utf8();
-    }
-    out
-}
-
-fn resolve_key(key: &str, fields: &[String], out_row: u32, plan: &Plan) -> String {
-    match key {
-        "row" => out_row.to_string(),
-        "firstrow" => plan.detail_first.unwrap_or(out_row).to_string(),
-        "lastrow" => plan.detail_last.unwrap_or(out_row).to_string(),
-        _ => match key.parse::<usize>() {
-            Ok(n) if n >= 1 && n <= fields.len() => fields[n - 1].clone(),
-            _ => String::new(),
-        },
-    }
+/// Resolve a parameter to its data value: `#name` via the label's schema,
+/// `#N` positionally. Missing bindings resolve to the empty string.
+fn resolve_param(param: &Param, schema: Option<&Vec<String>>, fields: &[String]) -> String {
+    let index = match param {
+        Param::Indexed(n) => Some(n - 1),
+        Param::Named(name) => schema.and_then(|names| names.iter().position(|x| x == name)),
+    };
+    index
+        .and_then(|i| fields.get(i))
+        .cloned()
+        .unwrap_or_default()
 }
 
 // ---------------------------------------------------------------------------
@@ -471,23 +532,46 @@ mod tests {
     }
 
     #[test]
-    fn resolves_placeholders() {
-        let plan = Plan {
-            emits: vec![],
-            detail_first: Some(7),
-            detail_last: Some(9),
-        };
+    fn parses_column_a_tag_and_schema() {
+        let (label, schema) = parse_tag("header(date, receipt, customer)");
+        assert_eq!(label, "header");
+        assert_eq!(
+            schema,
+            Some(vec!["date".into(), "receipt".into(), "customer".into()])
+        );
+
+        assert_eq!(parse_tag("row1"), ("row1".to_string(), None));
+        assert_eq!(parse_tag("  footer  "), ("footer".to_string(), None));
+    }
+
+    #[test]
+    fn parses_param_markers() {
+        assert!(matches!(parse_param("#price"), Some(Param::Named(n)) if n == "price"));
+        assert!(matches!(
+            parse_param("see #2 here"),
+            Some(Param::Indexed(2))
+        ));
+        assert!(parse_param("no marker").is_none());
+        assert!(parse_param("#").is_none());
+    }
+
+    #[test]
+    fn resolves_named_and_indexed_params() {
+        let schema = vec!["date".to_string(), "receipt".to_string()];
         let fields = vec!["1/5/2009".to_string(), "22215".to_string()];
         assert_eq!(
-            substitute("Date: ${1}", &fields, 2, &plan),
-            "Date: 1/5/2009"
+            resolve_param(&Param::Named("receipt".into()), Some(&schema), &fields),
+            "22215"
         );
-        assert_eq!(substitute("#${2}", &fields, 2, &plan), "#22215");
         assert_eq!(
-            substitute("SUM(E${firstrow}:E${lastrow})", &fields, 12, &plan),
-            "SUM(E7:E9)"
+            resolve_param(&Param::Indexed(1), Some(&schema), &fields),
+            "1/5/2009"
         );
-        assert_eq!(substitute("${row}", &fields, 12, &plan), "12");
-        assert_eq!(substitute("${9}", &fields, 2, &plan), "");
+        // Unknown name or out-of-range index → empty.
+        assert_eq!(
+            resolve_param(&Param::Named("nope".into()), Some(&schema), &fields),
+            ""
+        );
+        assert_eq!(resolve_param(&Param::Indexed(9), None, &fields), "");
     }
 }

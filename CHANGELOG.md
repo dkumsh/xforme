@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-06-18
+
+Reworked Excel-template parameters so a template is a fully valid, designable
+Excel workbook.
+
+### Changed
+
+- **Parameters are now bound via cell comments** (`#name`, or `#N` positional)
+  while the cell keeps a **real sample value**. Previously `${n}` was written
+  into the cell value, which produced `#VALUE!` in formulas that referenced it
+  and prevented number-format preview. Now formulas compute and formats preview
+  while designing, and the template opens cleanly in Excel and POI-based viewers.
+- **Field-name schema declared once per label in column A**, e.g.
+  `header(date,receipt,customer,address)`, mapping `#name` parameters to
+  positional data fields.
+- **Totals over the detail band use native Excel mixed anchoring**
+  (`=SUM(E$7:E8)`) instead of the `${firstrow}`/`${lastrow}` markers, which are
+  removed. The engine expands the anchored range as the band grows.
+
+### Fixed
+
+- Templates no longer trigger `FormulaParseException` / `#VALUE!` in Excel
+  formula evaluators (e.g. the ExcelReader IDE plugin), because formulas and
+  parameter cells are now valid Excel.
+
 ## [0.1.0] - 2026-06-18
 
 Initial release. The Rust migration of *templateIt* — the 2009 Java project by

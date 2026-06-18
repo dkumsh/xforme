@@ -90,19 +90,31 @@ cargo test                            # parser, evaluator, formula-shift, file +
 The template `.xlsx` is designed by hand in Excel/LibreOffice. The engine reads
 it (preserving all styling) via [`src/xlsx_template.rs`](src/xlsx_template.rs):
 
-* **Column A of each row is a control tag** (hidden in the output):
+* **Column A of each row is a visible control label** (the column is hidden in
+  the output):
   * `header` / `footer` — emitted once, fields from the matching data record;
-  * any other tag (`row1`, `row2`, …) — a *detail* row; the contiguous run of
+  * any other label (`row1`, `row2`, …) — a *detail* row; the contiguous run of
     detail rows is the **detail band**, emitted once per detail data record,
-    matched by tag (so alternating `row1`/`row2` styles interleave in data order);
+    matched by label (so alternating `row1`/`row2` styles interleave in data order);
   * empty — a static row.
-* **Placeholders** `${n}` inject the n-th data field; `${firstrow}`/`${lastrow}`
-  give the detail band's row range (for aggregate formulas); `${row}` is the
-  current row.
-* **Formulas** are written natively in Excel. When a template row is replicated
-  at a new output row, the engine row-shifts its relative references, so
-  `=B7*D7` becomes `=B12*D12` and `=SUM(E${firstrow}:E${lastrow})` resolves to
-  the actual rendered range. Absolute references (`$D$7`) are left untouched.
+* **Field-name schema** is declared once per label in the column-A text, e.g.
+  `header(date,receipt,customer,address)` (first declaration wins; bare `header`
+  rows attach to it).
+* **Parameters** are marked on a cell's **comment** — `#name` (looked up in the
+  label's schema) or `#N` (1-based). The cell holds a **real sample value**, so
+  formulas compute and number formats preview while you design; at render the
+  engine swaps in the data field. Excel's red comment markers show which cells
+  are parameters at a glance.
+* **Formulas** are written natively in Excel and stay valid Excel. When a
+  template row is replicated at a new output row, the engine row-shifts its
+  *relative* references (so `=B7*D7` becomes `=B12*D12`) while leaving
+  `$`-anchored rows untouched — exactly like Excel's own copy/fill.
+* **Totals over the variable-length detail band** use ordinary Excel mixed
+  anchoring. Write `=SUM(E$7:E8)` in the footer: the anchored start `E$7` stays
+  on the first detail row, while the relative end `E8` grows as the band expands
+  and the footer slides down — so it always covers every rendered detail row.
+  (This is how the original templateIt worked: it offset only the *relative*
+  parts of formula references when replicating cells.)
 
 `templates/sales_receipt_template.xlsx` (built by the `make_sample_template`
 binary) is a worked example — edit it in Excel to change the receipt's design

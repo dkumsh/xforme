@@ -1,32 +1,40 @@
 //! End-to-end test for the Excel-template engine: build a tiny template
 //! workbook in memory, render a data sheet against it, and assert the
-//! invariants — template tab removed, repeating rows expanded, placeholders
-//! filled, and relative formulas row-shifted.
+//! invariants — template tab removed, repeating rows expanded, parameters
+//! filled from comment markers, and relative formulas row-shifted.
 
-use umya_spreadsheet::Workbook;
+use umya_spreadsheet::{Comment, Workbook, Worksheet};
 use xforme::data;
 
-/// Build a minimal 1-column-of-content template:
-/// `A` = control tag, `B` = qty placeholder, `C` = `B*B`-ish line formula,
-/// footer sums the detail band.
+/// Bind a parameter: real sample value in the cell, `#name` in its comment.
+fn param(ws: &mut Worksheet, at: &str, sample: &str, name: &str) {
+    ws.cell_mut(at).set_value(sample);
+    let mut c = Comment::default();
+    c.new_comment(at);
+    c.set_text_string(format!("#{name}"));
+    ws.add_comments(c);
+}
+
+/// Build a minimal template: column-A labels declare schemas, parameters are
+/// comment-bound `#name` with real sample values, and the footer sums the
+/// detail band via mixed anchoring.
 fn build_template(path: &std::path::Path) {
     let mut book = umya_spreadsheet::new_file();
     book.set_sheet_name(0, "Tmpl").unwrap();
     let ws = book.sheet_by_name_mut("Tmpl").unwrap();
 
-    // header (fields: 1 = title text)
-    ws.cell_mut("A1").set_value("header");
-    ws.cell_mut("B1").set_value("${1}");
+    // header band: schema declares one field, `title`.
+    ws.cell_mut("A1").set_value("header(title)");
+    param(ws, "B1", "Sample Title", "title");
 
-    // detail band: one repeating row, amount = qty * 10 via formula B{r}*10
-    ws.cell_mut("A2").set_value("item");
-    ws.cell_mut("B2").set_value("${1}"); // qty
+    // detail band: schema `qty`; amount = qty * 10 via a real formula.
+    ws.cell_mut("A2").set_value("item(qty)");
+    param(ws, "B2", "1", "qty");
     ws.cell_mut("C2").set_formula("B2*10");
 
-    // footer: sum of the amount column across the detail band
+    // footer: SUM over the detail band, mixed anchoring (start anchored).
     ws.cell_mut("A3").set_value("footer");
-    ws.cell_mut("C3")
-        .set_formula("SUM(C${firstrow}:C${lastrow})");
+    ws.cell_mut("C3").set_formula("SUM(C$2:C2)");
 
     umya_spreadsheet::writer::xlsx::write(&book, path).unwrap();
 }
@@ -74,8 +82,9 @@ fn renders_template_to_report() {
     assert_eq!(ws.cell("C3").unwrap().formula(), "B3*10");
     assert_eq!(ws.cell("C4").unwrap().formula(), "B4*10");
 
-    // Footer landed on row 5 and its SUM spans the detail band rows 2..4.
-    assert_eq!(ws.cell("C5").unwrap().formula(), "SUM(C2:C4)");
+    // Footer landed on row 5; its SUM expanded over the rendered detail band:
+    // the anchored start stays `C$2`, the relative end grew from C2 to C4.
+    assert_eq!(ws.cell("C5").unwrap().formula(), "SUM(C$2:C4)");
 
     let _ = std::fs::remove_file(&tpl);
     let _ = std::fs::remove_file(&out);

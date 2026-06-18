@@ -1,6 +1,9 @@
 /target
 /.claude
 /.idea
+# LibreOffice lock files
+.~lock.*#
+
 # Generated demo output
 /sales_receipt.xlsx
 /sales_receipt.pdf
