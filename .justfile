@@ -25,3 +25,14 @@ build:
 # execute tests
 test:
    cargo test
+
+# run the Portfolio Statement showcase example -> target/portfolio_statement.xlsx
+portfolio:
+   cargo run --example portfolio_statement
+
+# run the Sales Receipt example -> target/sales_receipt.xlsx
+receipt:
+   cargo run --example sales_receipt
+
+# run all bundled examples
+examples: portfolio receipt
