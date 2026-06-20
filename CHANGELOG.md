@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-06-20
+
+Docs/tooling only — **no library API changes** (no need to upgrade for
+behavior).
+
+### Added
+
+- **`AGENTS.md`** at the repo root and an in-repo **Claude Code skill**
+  (`.claude/skills/xforme/SKILL.md`): guidance for humans and AI agents on
+  authoring `.xlsx` templates — by hand or programmatically with
+  `umya-spreadsheet` — and on using the render/parse API. Captures the
+  template contract and the umya 3.0 gotchas that silently break output
+  (page-setup vs. drawings, invisible bold text, `cellIs` formula child, chart
+  series retargeting) plus the render-and-eyeball verification loop.
+
 ## [0.2.0] - 2026-06-20
 
 Focused the project on the Excel-template workflow: fill a designer-authored
