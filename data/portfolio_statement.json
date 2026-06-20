@@ -1,0 +1,16 @@
+{
+  "template": "Portfolio",
+  "title": "Portfolio Statement",
+  "records": [
+    { "label": "header", "account": "0042-118827", "holder": "Jordan A. Rivera",
+      "period": "May 2026", "asof": "06/01/2026" },
+    { "label": "row1", "symbol": "AAPL",    "qty": 50,  "cost": 9200, "market": 11540 },
+    { "label": "row2", "symbol": "MSFT",    "qty": 30,  "cost": 9900, "market": 12600 },
+    { "label": "row1", "symbol": "TSLA",    "qty": 20,  "cost": 5800, "market": 4910 },
+    { "label": "row2", "symbol": "NVDA",    "qty": 15,  "cost": 6300, "market": 13950 },
+    { "label": "row1", "symbol": "AMZN",    "qty": 25,  "cost": 4200, "market": 4025 },
+    { "label": "row2", "symbol": "UST 10Y", "qty": 100, "cost": 9800, "market": 9650 },
+    { "label": "row1", "symbol": "Cash",    "qty": "—", "cost": 3000, "market": 3000 },
+    { "label": "footer" }
+  ]
+}

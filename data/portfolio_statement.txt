@@ -1,0 +1,11 @@
+#sheet	Portfolio	Portfolio Statement
+header	0042-118827	Jordan A. Rivera	May 2026	06/01/2026
+row1	AAPL	50	9200	11540
+row2	MSFT	30	9900	12600
+row1	TSLA	20	5800	4910
+row2	NVDA	15	6300	13950
+row1	AMZN	25	4200	4025
+row2	UST 10Y	100	9800	9650
+row1	Cash	—	3000	3000
+footer
+##end

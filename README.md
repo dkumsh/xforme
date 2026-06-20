@@ -9,44 +9,63 @@ xforme is the Rust migration of [*templateIt*](https://templateit.sourceforge.ne
 [Sales Receipt](https://templateit.sourceforge.net/SalesReceipt.html) example.
 
 The idea: **design the document once as an ordinary Excel workbook**, then stream
-a data file (tab-delimited, JSON, or YAML) through it. The engine **edits the
+a data file (tab-delimited, JSON, YAML, or CSV) through it. The engine **edits the
 template sheet in place** — filling parameters, growing the repeating rows, and
 renaming the sheet — so it preserves *everything* in the workbook: styles, number
-formats, merges, formulas, **conditional formatting, images, charts, data
-validations, print setup**. The original templateIt used Apache POI for this;
-xforme uses [`umya-spreadsheet`](https://crates.io/crates/umya-spreadsheet).
+formats, merges, formulas, **conditional formatting, in-cell data bars, images,
+and charts** (whose series ranges even **grow with the data**). The original
+templateIt used Apache POI for this; xforme uses
+[`umya-spreadsheet`](https://crates.io/crates/umya-spreadsheet).
 
 `.xlsx` is the product. **PDF, when you need it, is just a downstream conversion**
 of the produced spreadsheet (Excel "Save as PDF", or a headless LibreOffice — the
 CLI does the latter for you when LibreOffice is installed).
 
-## Example
+## Showcase
 
-The **template** you design in Excel/LibreOffice — control labels in column A,
-**placeholder sample values** (`NNNNN`, `MM/DD/YYYY`, `Customer Name`,
-`Sample item`, …), live formulas, and the callouts showing each cell's `#name`
-comment that binds it to a data field (`templates/sales_receipt_template.xlsx`):
+The bundled **Portfolio Statement** demo shows what survives — and *grows* — when
+data streams through an ordinary Excel template. The **template**
+(`templates/portfolio_statement_template.xlsx`) is a normal workbook a designer
+authors by hand: control labels in column A, placeholder sample values
+(`TICKER`, `0`, `$0.00`), an embedded logo, conditional formatting, in-cell data
+bars, live formulas, and two charts.
 
-![Sales Receipt template](images/template.png)
+![Portfolio Statement template](images/portfolio_template.png)
 
-Fed this tab-delimited **data file** (`data/sales_receipt.txt`):
+Now stream a holdings **data file** through it. Each record's `label` selects the
+matching template row (`header`, the `row1`/`row2` detail rows, `footer`), and its
+named fields bind to that row's `#name` parameters. This YAML stream
+(`data/portfolio_statement.yaml` — the `.txt`, `.json` and `.csv` forms are
+equivalent) carries seven holdings:
 
-```text
-#sheet	SalesReceipt	Sales Receipt
-header	1/5/2009	22215	Jose Maria Fernandez	1010 Broadway, New York, NY 10010
-row1	1	1	Introduction to Algebra	53.0
-row2	2	1	Introduction to Algebra Solutions Manual	14.0
-row1	3	1	Calculus and Analytic Geometry	62.5
-row2	4	2	Calculus Study Guide	18.0
-footer	.0525
-##end
+```yaml
+template: Portfolio
+title: Portfolio Statement
+records:
+  - { label: header, account: "0042-118827", holder: Jordan A. Rivera, period: May 2026, asof: "06/01/2026" }
+  - { label: row1, symbol: AAPL,    qty: 50,  cost: 9200, market: 11540 }
+  - { label: row2, symbol: MSFT,    qty: 30,  cost: 9900, market: 12600 }
+  - { label: row1, symbol: TSLA,    qty: 20,  cost: 5800, market: 4910 }
+  - { label: row2, symbol: NVDA,    qty: 15,  cost: 6300, market: 13950 }
+  - { label: row1, symbol: AMZN,    qty: 25,  cost: 4200, market: 4025 }
+  - { label: row2, symbol: "UST 10Y", qty: 100, cost: 9800, market: 9650 }
+  - { label: row1, symbol: Cash,    qty: "—", cost: 3000, market: 3000 }
+  - { label: footer }
 ```
 
-xforme renders the **report** — the placeholder samples replaced by the actual
-data (`22215`, `Jose Maria Fernandez`, …), column A and the parameter comments
-gone, the repeating rows expanded, and the formulas evaluated:
+xforme drives the template from that stream and produces the **report** below.
+Note what the engine carried over and **expanded to fit the seven holdings** (the
+template had only two sample rows): the logo, the green/red **conditional
+formatting** on the gain column, the teal **data bars** over market value (an
+in-cell histogram), the footer **`SUM` totals** (mixed-anchor, grown with the
+band), and both **column charts** — their series ranges stretched from the two
+sample rows to all seven, with negative bars where holdings lost value:
 
-![Rendered Sales Receipt](images/report.png)
+![Rendered Portfolio Statement](images/portfolio_report.png)
+
+A simpler, line-by-line walkthrough of the conventions is in
+[Designing a template](#designing-a-template) below, using the original
+templateIt [Sales Receipt](https://templateit.sourceforge.net/SalesReceipt.html).
 
 ## Pipeline
 
@@ -61,7 +80,8 @@ template.xlsx ──────────────────────
   detail band (row insert/remove, which grows spanning ranges), fills params,
   and renames the sheet; preserves styles, number formats, merges, formulas,
   conditional formatting, images, charts (via `umya-spreadsheet`).
-* **`demo_template`** — builds the bundled sample Sales Receipt template.
+* **`demo_template`** — builds the bundled sample templates (Sales Receipt and
+  Portfolio Statement).
 
 ## Run it
 
@@ -71,31 +91,33 @@ file:
 ```sh
 cargo run -- --template TEMPLATE.xlsx --data DATA.txt [--out PREFIX] [--no-pdf]
 
-# e.g. with the bundled sample template + data (.txt, .json, or .yaml all work):
+# the Portfolio Statement showcase (.txt, .json, .yaml, .csv all work):
+cargo run -- --template templates/portfolio_statement_template.xlsx --data data/portfolio_statement.json
+
+# the simpler Sales Receipt:
 cargo run -- --template templates/sales_receipt_template.xlsx --data data/sales_receipt.txt
-cargo run -- --template templates/sales_receipt_template.xlsx --data data/sales_receipt.yaml
 ```
 
 It writes `PREFIX.xlsx` (template tab removed, formulas live) and, unless
 `--no-pdf`, also `PREFIX.pdf` via a headless LibreOffice when one is available.
 `PREFIX` defaults to the data file's stem.
 
-**The demo example is self-contained** — the Sales Receipt template and data are
-embedded at compile time with `include_bytes!` / `include_str!`, so it needs no
-external files (this is the pattern to copy for shipping a fixed report inside
-your own binary, see [`examples/sales_receipt.rs`](examples/sales_receipt.rs)):
+**The demo examples are self-contained** — each embeds its template and data at
+compile time with `include_bytes!` / `include_str!`, so they need no external
+files (this is the pattern to copy for shipping a fixed report inside your own
+binary):
 
 ```sh
-cargo run --example sales_receipt            # -> sales_receipt.xlsx
+cargo run --example portfolio_statement      # the showcase -> portfolio_statement.xlsx
+cargo run --example sales_receipt            # the simpler demo -> sales_receipt.xlsx
 cargo run --example sales_receipt out.xlsx   # choose the output path
 ```
 
-The bundled template is the committed asset
-`templates/sales_receipt_template.xlsx` — edit it in Excel to change the design,
-or edit `src/demo_template.rs` and regenerate it:
+The bundled templates are committed assets under `templates/` — edit them in
+Excel to change the design, or edit `src/demo_template.rs` and regenerate:
 
 ```sh
-cargo run --bin make_sample_template  # regenerates templates/sales_receipt_template.xlsx
+cargo run --bin make_sample_template  # regenerates both templates/*.xlsx
 cargo test                            # parser, parameter resolution, formula-shift, e2e
 ```
 
@@ -167,7 +189,7 @@ they're replaced by the data fields at render:
 
 Feed it the four line items below and the detail band (rows 7–8) expands to four
 output rows; the `SUM` grows to `=SUM(E$7:E10)`; tax and total slide down with it
-— all as live Excel formulas. (That's exactly the rendered report shown above.)
+— all as live Excel formulas.
 
 ### The rules, precisely
 

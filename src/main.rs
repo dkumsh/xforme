@@ -106,6 +106,9 @@ fn run(args: &Args) -> Result<(), Box<dyn std::error::Error>> {
 /// Parse the data file, choosing the format by extension: `.json` and
 /// `.yaml`/`.yml` use the serde parsers (when their features are enabled);
 /// everything else is the tab-delimited format.
+// The `return`s below are the tail of cfg-gated arms; one variant is always
+// compiled out, which makes the survivor look "needless" to clippy.
+#[allow(clippy::needless_return)]
 fn parse_data(path: &str, raw: &str) -> Result<Vec<data::Sheet>, Box<dyn std::error::Error>> {
     let ext = Path::new(path)
         .extension()

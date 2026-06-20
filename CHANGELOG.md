@@ -39,6 +39,19 @@ code-defined ("declarative") engine.
 - **Non-fatal warnings** via `render_with_warnings`: a data record whose label
   matches no template row is reported (the CLI prints them to stderr) instead of
   being silently ignored. `render_to_file` now returns the warnings.
+- **Portfolio Statement showcase demo**
+  (`demo_template::sample_portfolio_statement_template_bytes`,
+  `examples/portfolio_statement.rs`, `data/portfolio_statement.{txt,json,yaml,csv}`,
+  committed template `templates/portfolio_statement_template.xlsx`). It exercises
+  the full feature set the engine preserves and grows: an embedded **logo image**,
+  **conditional formatting** (green/red on the gain column), **in-cell data bars**
+  (a market-value histogram), grown mixed-anchor `SUM` totals, and two **column
+  charts** whose series ranges stretch with the holdings. The README now leads
+  with it. Caveat baked into the template: it sets **no page setup**, because
+  umya 3.0 reserves a relationship id for printer settings whenever page setup
+  has any parameter but only emits that relationship with a binary blob present —
+  the resulting r:id shift makes Excel/LibreOffice drop the whole drawing layer
+  (logo + charts). Avoid page setup on templates that contain images or charts.
 
 ### Changed
 

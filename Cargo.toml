@@ -31,7 +31,11 @@ serde_json = { version = "1", optional = true }
 serde_norway = { version = "0.9", optional = true }
 csv = { version = "1", optional = true }
 
-# The bundled demo embeds and parses sales_receipt.json, so it needs `json`.
+# The bundled demos embed and parse a JSON data file, so they need `json`.
 [[example]]
 name = "sales_receipt"
+required-features = ["json"]
+
+[[example]]
+name = "portfolio_statement"
 required-features = ["json"]
