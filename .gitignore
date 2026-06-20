@@ -1,5 +1,9 @@
 /target
-/.claude
+# Ignore local Claude Code state, but track the in-repo skill that ships with xforme.
+/.claude/*
+!/.claude/skills
+/.claude/skills/*
+!/.claude/skills/xforme
 /.idea
 # LibreOffice lock files
 .~lock.*#
