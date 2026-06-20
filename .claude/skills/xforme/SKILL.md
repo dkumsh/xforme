@@ -19,7 +19,7 @@ formatting, in-cell data bars, images, and charts** (chart series ranges even gr
 with the data).
 
 ```text
-data file ──[data::parse*]──▶ Sheet ─┐
+data file ──[data::parse*]──▶ Sheet ──┐
                                       ├─[xlsx_template::render*]──▶ .xlsx report ──▶ (pdf::to_pdf*)
 template.xlsx ────────────────────────┘
 ```
