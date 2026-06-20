@@ -504,16 +504,37 @@ fn fill_in_place(book: &mut Workbook, sheet: &Sheet, model: &TplModel) -> Result
         }
     }
 
-    // 6. Rename the edited template sheet to the output title.
+    // 6. Rename the edited template sheet to the output title. Charts store
+    //    their data ranges as `SheetName!$A$1:…` strings, so the references must
+    //    follow the rename — otherwise the writer can't resolve the old name and
+    //    the workbook fails to serialize. (umya already grows the *row* part of
+    //    those ranges along with the detail band; only the sheet name is stale.)
     let title = if sheet.title.trim().is_empty() {
         sheet.template.as_str()
     } else {
         sheet.title.trim()
     };
     if title != sheet.template {
+        retarget_chart_series(ws, &sheet.template, title);
         ws.set_name(title);
     }
     Ok(())
+}
+
+/// Repoint every chart series formula on `ws` that references sheet `from` at
+/// `to`. Called just before a rename so charts authored against the template
+/// sheet keep plotting the rendered data.
+fn retarget_chart_series(ws: &mut umya_spreadsheet::Worksheet, from: &str, to: &str) {
+    for chart in ws.chart_collection_mut() {
+        for series in chart.area_chart_series_list_mut().area_chart_series_mut() {
+            for formula in series.formula_mut() {
+                let address = formula.address_mut();
+                if address.sheet_name() == from {
+                    address.set_sheet_name(to);
+                }
+            }
+        }
+    }
 }
 
 /// Resolve a parameter to its data value. A `#name` is looked up first in the

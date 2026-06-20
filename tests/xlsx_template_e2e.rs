@@ -270,3 +270,88 @@ fn preserves_and_grows_conditional_formatting() {
 
     let _ = std::fs::remove_file(&tpl);
 }
+
+#[test]
+fn preserves_image_and_grows_and_retargets_chart() {
+    // A template with an embedded image and a chart whose series covers the
+    // detail band. After render the image survives, the chart survives, its
+    // series range grows with the band, and its sheet reference follows the
+    // rename (T -> Out) — otherwise the workbook wouldn't even serialize.
+    use umya_spreadsheet::structs::drawing::spreadsheet::MarkerType;
+    use umya_spreadsheet::{Chart, ChartType, Image};
+
+    let dir = std::env::temp_dir();
+    let tpl = dir.join("xforme_chart_tmpl.xlsx");
+    {
+        let mut book = umya_spreadsheet::new_file();
+        book.set_sheet_name(0, "T").unwrap();
+        let ws = book.sheet_by_name_mut("T").unwrap();
+        for (cell, label) in [("A1", "row1(amt)"), ("A2", "row2(amt)")] {
+            ws.cell_mut(cell).set_value(label);
+        }
+        for cell in ["B1", "B2"] {
+            ws.cell_mut(cell).set_value("0");
+            let mut c = Comment::default();
+            c.new_comment(cell);
+            c.set_text_string("#amt");
+            ws.add_comments(c);
+        }
+        // A bar chart whose value series is the band's amount column.
+        let mut from = MarkerType::default();
+        from.set_coordinate("D1");
+        let mut to = MarkerType::default();
+        to.set_coordinate("J15");
+        let mut chart = Chart::default();
+        chart.new_chart(&ChartType::BarChart, from, to, vec!["T!$B$1:$B$2"]);
+        ws.add_chart(chart);
+        // A small embedded image (content irrelevant — dimensions are explicit).
+        let png: Vec<u8> = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 1, 2, 3];
+        let mut marker = MarkerType::default();
+        marker.set_coordinate("A1");
+        let mut image = Image::default();
+        image.new_image_with_dimensions(20, 60, "logo.png", png, marker);
+        ws.add_image(image);
+
+        umya_spreadsheet::writer::xlsx::write(&book, &tpl).unwrap();
+    }
+
+    // Four records -> band grows from 2 to 4 rows; sheet renamed T -> Out.
+    let raw = "#sheet\tT\tOut\nrow1\t10\nrow2\t20\nrow1\t30\nrow2\t40\n##end\n";
+    let sheet = &data::parse(raw).unwrap()[0];
+    let bytes = std::fs::read(&tpl).unwrap();
+    let out = xforme::xlsx_template::render_to_bytes(bytes.as_slice(), sheet).unwrap();
+
+    let mut book =
+        umya_spreadsheet::reader::xlsx::read_reader(std::io::Cursor::new(out), true).unwrap();
+    let ws = book.sheet_by_name_mut("Out").unwrap();
+    assert_eq!(
+        ws.image_collection().len(),
+        1,
+        "image preserved through render"
+    );
+    assert_eq!(
+        ws.chart_collection().len(),
+        1,
+        "chart preserved through render"
+    );
+
+    // The value series range followed the rename and grew with the band.
+    let chart = &mut ws.chart_collection_mut()[0];
+    let series = &chart.area_chart_series_list_mut().area_chart_series_mut()[0];
+    let range = series
+        .values()
+        .unwrap()
+        .number_reference()
+        .formula()
+        .address_str();
+    assert!(
+        range.contains("Out"),
+        "series retargeted to renamed sheet, got {range:?}"
+    );
+    assert!(
+        range.contains("$B$4"),
+        "series range grew with the band, got {range:?}"
+    );
+
+    let _ = std::fs::remove_file(&tpl);
+}

@@ -56,6 +56,12 @@ code-defined ("declarative") engine.
 - The engine now reads `#name` parameter markers from **rich-text comments** too
   (the form Excel/LibreOffice write when a template is edited and saved), so a
   re-saved template keeps binding its parameters.
+- **Charts now follow the rename and grow with the detail band.** umya already
+  expands a chart series' row range when rows are inserted (e.g. `$E$8:$E$9` →
+  `$E$8:$E$14`); the engine additionally **retargets each chart series' sheet
+  reference** to the renamed output sheet. Without that, a chart authored over
+  the band pointed at the (now gone) template sheet and the workbook failed to
+  serialize.
 
 ## [0.1.1] - 2026-06-18
 
